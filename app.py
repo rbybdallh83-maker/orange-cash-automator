@@ -1,9 +1,11 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import io
 import re
 import os
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+import json
+from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 
 # --- Page Configuration ---
@@ -16,17 +18,15 @@ st.set_page_config(
 
 DEFAULT_AGENTS_FILE = "Agents Included in daily inbox.xlsx"
 
-# --- Custom CSS for Modern Orange Cash UI ---
+# --- Custom CSS for Unified Orange Cash UI ---
 st.markdown("""
 <style>
-    /* Main container padding */
     .block-container {
         padding-top: 1.5rem;
         padding-bottom: 3rem;
         max-width: 1200px;
     }
     
-    /* Hero Banner */
     .hero-banner {
         background: linear-gradient(135deg, #1E1E1E 0%, #2D2D2D 60%, #FF7900 140%);
         padding: 1.8rem 2rem;
@@ -52,33 +52,32 @@ st.markdown("""
         color: #FF7900;
     }
 
-    /* Section Headers */
     .step-badge {
         display: inline-block;
         background-color: #FF7900;
-        color: white;
+        color: #FFFFFF;
         font-weight: 700;
-        font-size: 0.8rem;
-        padding: 0.2rem 0.65rem;
+        font-size: 0.78rem;
+        padding: 0.22rem 0.7rem;
         border-radius: 20px;
-        margin-bottom: 0.4rem;
+        margin-bottom: 0.45rem;
         text-transform: uppercase;
         letter-spacing: 0.5px;
     }
 
-    /* Metric Cards Styling */
     div[data-testid="metric-container"] {
-        background-color: rgba(255, 121, 0, 0.06);
-        border: 1px solid rgba(255, 121, 0, 0.25);
+        background-color: #FFFFFF;
+        border: 1px solid #E6E8EB;
+        border-top: 3px solid #FF7900;
         padding: 0.9rem 1.1rem;
         border-radius: 10px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.03);
     }
 
-    /* Primary Buttons */
     .stButton > button[kind="primary"] {
         background-color: #FF7900;
         border-color: #FF7900;
-        color: white;
+        color: #FFFFFF;
         font-weight: 700;
         border-radius: 8px;
         padding: 0.55rem 1.5rem;
@@ -90,19 +89,36 @@ st.markdown("""
         transform: translateY(-1px);
     }
 
-    /* Download Button */
     .stDownloadButton > button {
         background-color: #198754;
-        color: white;
+        color: #FFFFFF;
         font-weight: 700;
         border-radius: 8px;
         border: none;
-        padding: 0.65rem 1.5rem;
+        padding: 0.62rem 1.5rem;
         width: 100%;
+        font-size: 0.95rem;
     }
     .stDownloadButton > button:hover {
         background-color: #157347;
-        color: white;
+        color: #FFFFFF;
+    }
+
+    /* Tabs Styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #FFFFFF;
+        border-radius: 8px 8px 0 0;
+        padding: 10px 20px;
+        font-weight: 700;
+        border: 1px solid #E6E8EB;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #FFF4EB !important;
+        border-bottom: 3px solid #FF7900 !important;
+        color: #FF7900 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -195,46 +211,21 @@ def load_df(source):
         return pd.read_csv(source)
     return pd.read_excel(source)
 
-# --- Excel Formatter Matching Exact Reference Image ---
+# --- Clean Default Excel Formatter (Center Alignment + Auto-Fit Size Only) ---
 def generate_styled_excel(df, sheet_name):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
         ws = writer.sheets[sheet_name]
 
-        # Styling definitions matching the reference screenshot
-        header_fill = PatternFill(start_color="C65911", end_color="C65911", fill_type="solid")
-        data_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+        center_alignment = Alignment(horizontal="center", vertical="center")
 
-        header_font = Font(name="Times New Roman", size=11, bold=True, color="FFFFFF")
-        data_font = Font(name="Times New Roman", size=11, bold=True, color="000000")
-
-        center_alignment = Alignment(horizontal="center", vertical="center", wrap_text=False)
-
-        # Double border style around all cells
-        double_side = Side(style="double", color="808080")
-        cell_border = Border(left=double_side, right=double_side, top=double_side, bottom=double_side)
-
-        # Style Header Row (Row 1)
-        ws.row_dimensions[1].height = 24
-        for col_idx in range(1, len(df.columns) + 1):
-            cell = ws.cell(row=1, column=col_idx)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = center_alignment
-            cell.border = cell_border
-
-        # Style Data Rows (Row 2+)
-        for row_idx in range(2, len(df) + 2):
-            ws.row_dimensions[row_idx].height = 21
+        for row_idx in range(1, len(df) + 2):
+            ws.row_dimensions[row_idx].height = 20
             for col_idx in range(1, len(df.columns) + 1):
                 cell = ws.cell(row=row_idx, column=col_idx)
-                cell.fill = data_fill
-                cell.font = data_font
                 cell.alignment = center_alignment
-                cell.border = cell_border
 
-        # Auto-fit column widths with generous padding so text never clips
         for col_idx, col_name in enumerate(df.columns, start=1):
             col_letter = get_column_letter(col_idx)
             max_len = len(str(col_name))
@@ -242,15 +233,54 @@ def generate_styled_excel(df, sheet_name):
                 val_len = len(str(val))
                 if val_len > max_len:
                     max_len = val_len
-            ws.column_dimensions[col_letter].width = max(max_len + 6, 13)
+            ws.column_dimensions[col_letter].width = max_len + 5
 
     return output.getvalue()
+
+# --- One-Click Copy Component for Outlook ---
+def render_copy_button(df):
+    tsv_text = df.to_csv(sep='\t', index=False)
+    tsv_json = json.dumps(tsv_text)
+    html_code = f"""
+    <div style="width: 100%; font-family: sans-serif;">
+        <button id="copyBtn" onclick="copySchedule()" style="
+            width: 100%;
+            background-color: #1E1E1E;
+            color: #FFFFFF;
+            font-weight: 700;
+            font-size: 14px;
+            padding: 10px 16px;
+            border: 2px solid #FF7900;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        ">
+            📋 Copy Schedule for Outlook (One-Click)
+        </button>
+    </div>
+    <script>
+        function copySchedule() {{
+            const text = {tsv_json};
+            navigator.clipboard.writeText(text).then(function() {{
+                const btn = document.getElementById('copyBtn');
+                btn.innerText = '✅ Copied! Ready to Paste in Outlook';
+                btn.style.backgroundColor = '#FF7900';
+                btn.style.color = '#FFFFFF';
+                setTimeout(() => {{
+                    btn.innerText = '📋 Copy Schedule for Outlook (One-Click)';
+                    btn.style.backgroundColor = '#1E1E1E';
+                }}, 2500);
+            }});
+        }}
+    </script>
+    """
+    components.html(html_code, height=50)
 
 # --- Header UI ---
 st.markdown("""
 <div class="hero-banner">
     <h1 class="hero-title">⚡ <span class="orange-accent">Orange Cash</span> — Inbox Shift Automator</h1>
-    <p class="hero-subtitle">Smart shift distribution, automatic agent detection, and Outlook-ready formatted schedules.</p>
+    <p class="hero-subtitle">Smart shift distribution, automatic agent detection, and clean Outlook-ready schedules.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -314,9 +344,6 @@ with col2:
         st.markdown("#### 👥 Inbox Master Agents List")
         df_agents = None
         agents_source_label = ""
-
-        if "custom_agents" in st.session_state and st.session_state["custom_agents"] is not None:
-            pass
 
         custom_agents_file = st.file_uploader(
             "Optional: Upload updated Agents file to replace the built-in list",
@@ -474,7 +501,7 @@ if att_file is not None and df_agents is not None:
                 st.session_state["file_prefix"] = file_prefix
                 st.session_state["excluded_count"] = len(excluded_pids)
 
-# --- Step 4: Final Schedule Display, Metrics, Emergency Update & Export ---
+# --- Step 4: Tabbed Results (Schedule & Export / Emergency Update) ---
 if "schedule_df" in st.session_state:
     df_res = st.session_state["schedule_df"]
     active_end_mins = st.session_state.get("end_mins_lock", end_mins_const)
@@ -484,56 +511,67 @@ if "schedule_df" in st.session_state:
     excluded_cnt = st.session_state.get("excluded_count", 0)
     
     st.markdown("---")
-    st.markdown('<span class="step-badge">Step 4 • Final Output & Export</span>', unsafe_allow_html=True)
-    st.subheader(f"📋 Final {active_prefix} Inbox Schedule")
+    st.markdown('<span class="step-badge">Step 4 • Final Output & Actions</span>', unsafe_allow_html=True)
+    st.subheader(f"📋 {active_prefix} Inbox Schedule Dashboard")
 
     # Summary Metrics Row
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("👥 Scheduled Agents", f"{len(df_res)} Agents")
-    m2.metric("🚫 Excluded (Task/Assist)", f"{excluded_cnt} Agents")
+    m2.metric("🚫 Excluded (Task/Assist/Sick)", f"{excluded_cnt} Agents")
     m3.metric("🟢 Start Time", active_start_label)
     m4.metric("🔒 Locked End Time", active_end_label)
 
     st.write("")
-    st.dataframe(df_res, use_container_width=True, hide_index=True)
 
-    # Action Area: Download & Emergency Update side-by-side
-    action_col1, action_col2 = st.columns([1, 1], gap="large")
+    # Organized Tabs
+    tab_schedule, tab_emergency = st.tabs([
+        "📋 Schedule & Export",
+        "🛠️ Emergency Update (Sick / Left)"
+    ])
 
-    with action_col1:
-        st.markdown("#### 📥 Export Formatted Excel")
-        st.caption("Formatted with Times New Roman, Bold 11pt, centered cells, double borders, and auto-fit widths.")
-        excel_bytes = generate_styled_excel(df_res, f"{active_prefix}_Schedule")
-        st.download_button(
-            label=f"📥 Download Final {active_prefix} Schedule (.xlsx)",
-            data=excel_bytes,
-            file_name=f"Final_{active_prefix}_Inbox_Schedule.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    with tab_schedule:
+        st.dataframe(df_res, use_container_width=True, hide_index=True)
 
-    with action_col2:
-        if len(df_res) > 1:
-            st.markdown("#### 🛠️ Emergency Redistribution")
-            st.caption("Remove an agent (Sick / Left early) and automatically redistribute their minutes until the end.")
-            with st.expander("Open Emergency Update Controls"):
+        st.write("")
+        exp_col1, exp_col2 = st.columns(2, gap="medium")
+        with exp_col1:
+            excel_bytes = generate_styled_excel(df_res, f"{active_prefix}_Schedule")
+            st.download_button(
+                label=f"📥 Download Final {active_prefix} Excel (.xlsx)",
+                data=excel_bytes,
+                file_name=f"Final_{active_prefix}_Inbox_Schedule.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        with exp_col2:
+            render_copy_button(df_res)
+
+    with tab_emergency:
+        with st.container(border=True):
+            st.markdown("#### 🛠️ Remove Agent & Redistribute Minutes")
+            st.caption("Select an agent who became Sick or Left early. Their assigned minutes will be evenly redistributed until the end of the shift.")
+            
+            if len(df_res) <= 1:
+                st.warning("Not enough agents remaining in the schedule to perform redistribution.")
+            else:
                 pids_list = df_res["PID"].astype(str).tolist()
                 pid_to_label = {
-                    str(row["PID"]): f"{row['PID']} - {row['Agent Name']}"
+                    str(row["PID"]): f"{row['PID']} — {row['Agent Name']} ({row['From']} to {row['To']})"
                     for _, row in df_res.iterrows()
                 }
                 
-                sick_pid = st.selectbox(
+                em_c1, em_c2 = st.columns(2)
+                sick_pid = em_c1.selectbox(
                     "1. Select Agent to Remove (Sick / Left):",
                     options=pids_list,
                     format_func=lambda x: pid_to_label.get(x, x)
                 )
-                start_pid = st.selectbox(
+                start_pid = em_c2.selectbox(
                     "2. Start Redistribution From:",
                     options=pids_list,
                     format_func=lambda x: pid_to_label.get(x, x)
                 )
 
-                if st.button("⚡ Apply Update & Redistribute", type="primary", use_container_width=True):
+                if st.button("⚡ Apply Update & Redistribute", type="primary"):
                     sick_idx = df_res.index[df_res["PID"].astype(str) == sick_pid].tolist()[0]
                     start_idx = df_res.index[df_res["PID"].astype(str) == start_pid].tolist()[0]
                     end_idx = len(df_res) - 1
