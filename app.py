@@ -2,8 +2,11 @@ import streamlit as st
 import pandas as pd
 import io
 import re
+import os
 
 st.set_page_config(page_title="Orange Cash - Inbox Automator", layout="wide")
+
+DEFAULT_AGENTS_FILE = "Agents Included in daily inbox.xlsx"
 
 # --- Pure Minute Calculation Helpers ---
 def mins_to_time_str(total_mins):
@@ -87,10 +90,11 @@ def format_shift_time(val):
     except Exception:
         return s
 
-def load_df(uploaded_file):
-    if uploaded_file.name.lower().endswith('.csv'):
-        return pd.read_csv(uploaded_file)
-    return pd.read_excel(uploaded_file)
+def load_df(source):
+    name = source if isinstance(source, str) else source.name
+    if name.lower().endswith('.csv'):
+        return pd.read_csv(source)
+    return pd.read_excel(source)
 
 # --- App UI ---
 st.title("⚡ Orange Cash - Inbox Shift Automator")
@@ -124,118 +128,162 @@ else:
     end_time_label = "3:00 AM"
     file_prefix = "Males"
 
-st.markdown(f"Upload the Attendance and Angry Agents files, and enter any **Assist / Task** exclusions to automatically generate and lock the schedule until **{end_time_label}**.")
+st.markdown(f"Upload the Attendance file to automatically detect eligible Inbox agents, mark any **Assist / Task** exclusions, and lock the schedule until **{end_time_label}**.")
 
 col1, col2 = st.columns(2)
+
 with col1:
     att_file = st.file_uploader("1️⃣ Upload Attendance File", type=["xlsx", "xls", "csv"])
+
 with col2:
-    angry_file = st.file_uploader("2️⃣ Upload Angry Agents File", type=["xlsx", "xls", "csv"])
+    st.markdown("**2️⃣ Agents Included in Daily Inbox (Master List)**")
+    custom_agents_file = st.file_uploader(
+        "Optional: Upload updated Agents file to override default",
+        type=["xlsx", "xls", "csv"],
+        key="custom_agents"
+    )
+    
+    df_agents = None
+    agents_source_label = ""
+    if custom_agents_file is not None:
+        df_agents = load_df(custom_agents_file)
+        agents_source_label = f"Uploaded Update ({custom_agents_file.name})"
+    elif os.path.exists(DEFAULT_AGENTS_FILE):
+        df_agents = load_df(DEFAULT_AGENTS_FILE)
+        agents_source_label = f"Default Built-in File ({len(df_agents)} Agents)"
+    else:
+        st.error(f"Default file '{DEFAULT_AGENTS_FILE}' not found. Please upload it above.")
 
-excluded_input = st.text_input(
-    "3️⃣ Pre-Distribution Exclusions (Assist / Task PIDs):",
-    placeholder="Enter PIDs separated by commas or spaces (e.g., 74104, 77710) — leave blank if none"
-)
+    if df_agents is not None:
+        st.caption(f"✅ Active Master List: **{agents_source_label}**")
+        with st.expander("👁️ View / Inspect Master Agents List"):
+            st.dataframe(df_agents, use_container_width=True, hide_index=True, height=250)
 
-if att_file and angry_file:
-    if st.button("🚀 Generate Final Schedule", type="primary"):
-        df_att = load_df(att_file)
-        df_angry = load_df(angry_file)
+# --- Automatic Detection upon Uploading Attendance File ---
+eligible_df = None
+if att_file is not None and df_agents is not None:
+    df_att = load_df(att_file)
+    df_att.columns = [str(c).strip() for c in df_att.columns]
 
-        # Normalize column names
-        df_att.columns = [str(c).strip() for c in df_att.columns]
-
-        # 1. Split PID & Agent Name if combined in a single column
+    # 1. Split PID & Agent Name if combined in a single column
+    cols_lower = {c.lower(): c for c in df_att.columns}
+    if 'pid' not in cols_lower:
+        for c in df_att.columns:
+            sample = str(df_att[c].dropna().iloc[0]).strip() if not df_att[c].dropna().empty else ""
+            if " " in sample and sample.split(" ")[0].isdigit():
+                extracted = df_att[c].apply(extract_pid_and_name)
+                df_att['Pid'] = [x[0] for x in extracted]
+                df_att['Agent'] = [x[1] for x in extracted]
+                break
         cols_lower = {c.lower(): c for c in df_att.columns}
-        if 'pid' not in cols_lower:
-            for c in df_att.columns:
-                sample = str(df_att[c].dropna().iloc[0]).strip() if not df_att[c].dropna().empty else ""
-                if " " in sample and sample.split(" ")[0].isdigit():
-                    extracted = df_att[c].apply(extract_pid_and_name)
-                    df_att['Pid'] = [x[0] for x in extracted]
-                    df_att['Agent'] = [x[1] for x in extracted]
-                    break
-            cols_lower = {c.lower(): c for c in df_att.columns}
 
-        # Identify required columns
-        team_col = cols_lower.get('team')
-        state_col = cols_lower.get('schedule state')
-        pid_col = cols_lower.get('pid')
-        agent_col = cols_lower.get('agent') or cols_lower.get('agent name')
-        start_col = cols_lower.get('start time') or cols_lower.get('shift')
+    # Identify required columns
+    team_col = cols_lower.get('team')
+    state_col = cols_lower.get('schedule state')
+    pid_col = cols_lower.get('pid')
+    agent_col = cols_lower.get('agent') or cols_lower.get('agent name')
+    start_col = cols_lower.get('start time') or cols_lower.get('shift')
 
-        missing = [name for name, col in [('Team', team_col), ('Schedule State', state_col), ('Pid', pid_col), ('Agent', agent_col), ('Start Time', start_col)] if not col]
-        if missing:
-            st.error(f"Missing required columns in the Attendance file: {', '.join(missing)}")
-            st.stop()
+    missing = [name for name, col in [('Team', team_col), ('Schedule State', state_col), ('Pid', pid_col), ('Agent', agent_col), ('Start Time', start_col)] if not col]
+    if missing:
+        st.error(f"Missing required columns in the Attendance file: {', '.join(missing)}")
+        st.stop()
 
-        # 2. Filter Team column
-        df_att[team_col] = df_att[team_col].astype(str).str.strip()
-        df_filtered = df_att[df_att[team_col].isin(target_teams)].copy()
+    # 2. Filter Team column
+    df_att[team_col] = df_att[team_col].astype(str).str.strip()
+    df_filtered = df_att[df_att[team_col].isin(target_teams)].copy()
 
-        # 3. Filter Schedule State column
-        df_filtered[state_col] = df_filtered[state_col].astype(str).str.strip()
-        df_filtered = df_filtered[df_filtered[state_col] == "Orange Cash"].copy()
+    # 3. Filter Schedule State column
+    df_filtered[state_col] = df_filtered[state_col].astype(str).str.strip()
+    df_filtered = df_filtered[df_filtered[state_col] == "Orange Cash"].copy()
 
-        # 4. Sort Start Time ascending
-        df_filtered['_sort_time'] = pd.to_datetime(df_filtered[start_col].astype(str).str.strip(), errors='coerce')
-        df_filtered = df_filtered.sort_values(by=['_sort_time', pid_col], ascending=[True, True]).copy()
+    # 4. Sort Start Time ascending
+    df_filtered['_sort_time'] = pd.to_datetime(df_filtered[start_col].astype(str).str.strip(), errors='coerce')
+    df_filtered = df_filtered.sort_values(by=['_sort_time', pid_col], ascending=[True, True]).copy()
 
-        # 5. Match with Angry Agents file & fetch Profile (INS) if available
-        df_filtered['PID_clean'] = df_filtered[pid_col].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-        
-        df_angry.columns = [str(c).strip() for c in df_angry.columns]
-        angry_cols_lower = {c.lower(): c for c in df_angry.columns}
-        angry_pid_col = angry_cols_lower.get('pid', df_angry.columns[0])
-        profile_col = angry_cols_lower.get('profile')
+    # 5. Match with Master Agents file & fetch Profile (INS) if available
+    df_filtered['PID_clean'] = df_filtered[pid_col].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
 
-        df_angry['PID_clean'] = df_angry[angry_pid_col].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-        angry_pids = set(df_angry['PID_clean'])
+    df_agents_clean = df_agents.copy()
+    df_agents_clean.columns = [str(c).strip() for c in df_agents_clean.columns]
+    agents_cols_lower = {c.lower(): c for c in df_agents_clean.columns}
+    agents_pid_col = agents_cols_lower.get('pid', df_agents_clean.columns[0])
+    profile_col = agents_cols_lower.get('profile')
 
-        df_filtered = df_filtered[df_filtered['PID_clean'].isin(angry_pids)].copy()
+    df_agents_clean['PID_clean'] = df_agents_clean[agents_pid_col].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+    included_pids = set(df_agents_clean['PID_clean'])
 
-        # 6. Exclude Assist / Task PIDs
-        excluded_pids = set(re.findall(r'\d+', excluded_input))
-        if excluded_pids:
-            df_filtered = df_filtered[~df_filtered['PID_clean'].isin(excluded_pids)].copy()
+    df_filtered = df_filtered[df_filtered['PID_clean'].isin(included_pids)].copy()
+    df_filtered = df_filtered.drop_duplicates(subset=['PID_clean']).reset_index(drop=True)
 
-        # Remove duplicates
-        df_filtered = df_filtered.drop_duplicates(subset=['PID_clean']).reset_index(drop=True)
+    # Map INS (Profile)
+    if profile_col:
+        df_agents_unique = df_agents_clean.drop_duplicates(subset=['PID_clean'])
+        ins_map = dict(zip(df_agents_unique['PID_clean'], df_agents_unique[profile_col].astype(str).str.strip()))
+        df_filtered['INS_val'] = df_filtered['PID_clean'].map(ins_map).fillna("")
+    else:
+        df_filtered['INS_val'] = ""
 
-        # 7. Build output columns (include INS next to PID if Profile exists)
-        if profile_col:
-            df_angry_unique = df_angry.drop_duplicates(subset=['PID_clean'])
-            ins_map = dict(zip(df_angry_unique['PID_clean'], df_angry_unique[profile_col].astype(str).str.strip()))
-            ins_values = df_filtered['PID_clean'].map(ins_map).fillna("")
-            res_df = pd.DataFrame({
-                "PID": df_filtered['PID_clean'],
-                "INS": ins_values,
-                "Agent Name": df_filtered[agent_col].astype(str).str.strip(),
-                "Shift": df_filtered[start_col].apply(format_shift_time)
-            })
-        else:
-            res_df = pd.DataFrame({
-                "PID": df_filtered['PID_clean'],
-                "Agent Name": df_filtered[agent_col].astype(str).str.strip(),
-                "Shift": df_filtered[start_col].apply(format_shift_time)
-            })
+    df_filtered['Agent_clean'] = df_filtered[agent_col].astype(str).str.strip()
+    df_filtered['Shift_clean'] = df_filtered[start_col].apply(format_shift_time)
+    eligible_df = df_filtered
 
-        # 8. Calculate and distribute shifts
-        n = len(res_df)
-        durations = calculate_initial_shifts(n, total_target_const)
-        
-        current_mins = start_mins_const
-        from_list, to_list = [], []
-        for d in durations:
-            from_list.append(mins_to_time_str(current_mins))
-            to_list.append(mins_to_time_str(current_mins + d - 1))
-            current_mins += d
+    # --- 3. Interactive Selection for Assist / Task Exclusions ---
+    st.markdown("---")
+    st.subheader(f"3️⃣ Detected Eligible {file_prefix} Inbox Agents ({len(eligible_df)} Found)")
 
-        res_df["from"] = from_list
-        res_df["to"] = to_list
-        st.session_state["schedule_df"] = res_df
-        st.session_state["end_mins_lock"] = end_mins_const
-        st.session_state["file_prefix"] = file_prefix
+    if len(eligible_df) == 0:
+        st.warning("No matching agents found for the selected mode and Attendance file.")
+    else:
+        options_list = [
+            f"{row['Agent_clean']} ({row['PID_clean']}) - Shift: {row['Shift_clean']}"
+            for _, row in eligible_df.iterrows()
+        ]
+        option_to_pid = {
+            f"{row['Agent_clean']} ({row['PID_clean']}) - Shift: {row['Shift_clean']}": row['PID_clean']
+            for _, row in eligible_df.iterrows()
+        }
+
+        excluded_options = st.multiselect(
+            "Select agents on Assist / Task to EXCLUDE from the schedule:",
+            options=options_list,
+            placeholder="Click here to choose agents to exclude (leave empty if none)..."
+        )
+        excluded_pids = {option_to_pid[opt] for opt in excluded_options}
+
+        if st.button("🚀 Generate Final Schedule", type="primary"):
+            final_agents = eligible_df[~eligible_df['PID_clean'].isin(excluded_pids)].reset_index(drop=True)
+
+            if profile_col:
+                res_df = pd.DataFrame({
+                    "PID": final_agents['PID_clean'],
+                    "INS": final_agents['INS_val'],
+                    "Agent Name": final_agents['Agent_clean'],
+                    "Shift": final_agents['Shift_clean']
+                })
+            else:
+                res_df = pd.DataFrame({
+                    "PID": final_agents['PID_clean'],
+                    "Agent Name": final_agents['Agent_clean'],
+                    "Shift": final_agents['Shift_clean']
+                })
+
+            # Calculate and distribute shifts
+            n = len(res_df)
+            durations = calculate_initial_shifts(n, total_target_const)
+
+            current_mins = start_mins_const
+            from_list, to_list = [], []
+            for d in durations:
+                from_list.append(mins_to_time_str(current_mins))
+                to_list.append(mins_to_time_str(current_mins + d - 1))
+                current_mins += d
+
+            res_df["from"] = from_list
+            res_df["to"] = to_list
+            st.session_state["schedule_df"] = res_df
+            st.session_state["end_mins_lock"] = end_mins_const
+            st.session_state["file_prefix"] = file_prefix
 
 # --- Display Table, Emergency Update & Export ---
 if "schedule_df" in st.session_state:
@@ -243,6 +291,7 @@ if "schedule_df" in st.session_state:
     active_end_mins = st.session_state.get("end_mins_lock", end_mins_const)
     active_prefix = st.session_state.get("file_prefix", file_prefix)
     
+    st.markdown("---")
     st.subheader(f"📋 Final {active_prefix} Schedule ({len(df_res)} Agents)")
     st.dataframe(df_res, use_container_width=True, hide_index=True)
 
