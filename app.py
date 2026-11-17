@@ -1,10 +1,8 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import io
 import re
 import os
-import json
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 
@@ -18,107 +16,192 @@ st.set_page_config(
 
 DEFAULT_AGENTS_FILE = "Agents Included in daily inbox.xlsx"
 
-# --- Custom CSS for Unified Orange Cash UI ---
+# --- Custom CSS for High-End Orange Cash Aesthetic ---
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+
     .block-container {
         padding-top: 1.5rem;
         padding-bottom: 3rem;
-        max-width: 1200px;
+        max-width: 1180px;
     }
     
+    /* Hero Banner */
     .hero-banner {
-        background: linear-gradient(135deg, #1E1E1E 0%, #2D2D2D 60%, #FF7900 140%);
-        padding: 1.8rem 2rem;
-        border-radius: 14px;
-        border-left: 6px solid #FF7900;
-        margin-bottom: 1.5rem;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.12);
+        background: linear-gradient(125deg, #121212 0%, #1F1F1F 55%, #3B1E08 100%);
+        padding: 2rem 2.2rem;
+        border-radius: 16px;
+        border: 1px solid rgba(255, 121, 0, 0.25);
+        border-left: 7px solid #FF7900;
+        margin-bottom: 1.8rem;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 1rem;
     }
     .hero-title {
         color: #FFFFFF;
-        font-size: 1.9rem;
+        font-size: 2rem;
         font-weight: 800;
         margin: 0;
-        letter-spacing: 0.3px;
+        letter-spacing: -0.3px;
+        line-height: 1.2;
     }
     .hero-subtitle {
-        color: #E0E0E0;
-        font-size: 0.98rem;
-        margin-top: 0.4rem;
+        color: #CCCCCC;
+        font-size: 0.96rem;
+        margin-top: 0.45rem;
         margin-bottom: 0;
+        font-weight: 400;
     }
     .orange-accent {
         color: #FF7900;
     }
+    .status-pill {
+        background: rgba(255, 121, 0, 0.16);
+        border: 1px solid rgba(255, 121, 0, 0.5);
+        color: #FFA34D;
+        padding: 0.45rem 1rem;
+        border-radius: 50px;
+        font-size: 0.85rem;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+    }
 
+    /* Step Badges */
+    .step-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 0.75rem;
+    }
     .step-badge {
-        display: inline-block;
-        background-color: #FF7900;
+        background: linear-gradient(135deg, #FF7900, #E06000);
         color: #FFFFFF;
-        font-weight: 700;
-        font-size: 0.78rem;
-        padding: 0.22rem 0.7rem;
-        border-radius: 20px;
-        margin-bottom: 0.45rem;
+        font-weight: 800;
+        font-size: 0.75rem;
+        padding: 0.25rem 0.75rem;
+        border-radius: 50px;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.7px;
+        box-shadow: 0 2px 8px rgba(255, 121, 0, 0.3);
+    }
+    .step-title {
+        font-size: 1.15rem;
+        font-weight: 700;
+        color: #1E1E1E;
+        margin: 0;
     }
 
-    div[data-testid="metric-container"] {
+    /* Cards & Containers */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
         background-color: #FFFFFF;
-        border: 1px solid #E6E8EB;
-        border-top: 3px solid #FF7900;
-        padding: 0.9rem 1.1rem;
-        border-radius: 10px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+        border-radius: 14px !important;
+        border: 1px solid #EAECEF !important;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.03);
+        padding: 0.3rem;
     }
 
+    /* Metric Cards */
+    div[data-testid="metric-container"] {
+        background: linear-gradient(180deg, #FFFFFF 0%, #FFFBF7 100%);
+        border: 1px solid #F0E6DC;
+        border-top: 4px solid #FF7900;
+        padding: 1rem 1.2rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+        transition: transform 0.2s ease;
+    }
+    div[data-testid="metric-container"]:hover {
+        transform: translateY(-2px);
+    }
+
+    /* Primary Buttons */
     .stButton > button[kind="primary"] {
-        background-color: #FF7900;
-        border-color: #FF7900;
+        background: linear-gradient(135deg, #FF7900 0%, #E56700 100%);
+        border: none;
         color: #FFFFFF;
         font-weight: 700;
-        border-radius: 8px;
-        padding: 0.55rem 1.5rem;
+        border-radius: 10px;
+        padding: 0.65rem 1.6rem;
+        font-size: 0.95rem;
+        box-shadow: 0 4px 14px rgba(255, 121, 0, 0.3);
         transition: all 0.2s ease;
     }
     .stButton > button[kind="primary"]:hover {
-        background-color: #E06800;
-        border-color: #E06800;
+        background: linear-gradient(135deg, #E56700 0%, #CC5800 100%);
+        box-shadow: 0 6px 18px rgba(255, 121, 0, 0.4);
         transform: translateY(-1px);
     }
 
+    /* Download Button */
     .stDownloadButton > button {
-        background-color: #198754;
+        background: linear-gradient(135deg, #198754 0%, #146C43 100%);
         color: #FFFFFF;
         font-weight: 700;
-        border-radius: 8px;
+        border-radius: 10px;
         border: none;
-        padding: 0.62rem 1.5rem;
+        padding: 0.75rem 1.6rem;
         width: 100%;
-        font-size: 0.95rem;
+        font-size: 1rem;
+        box-shadow: 0 4px 14px rgba(25, 135, 84, 0.25);
+        transition: all 0.2s ease;
     }
     .stDownloadButton > button:hover {
-        background-color: #157347;
+        background: linear-gradient(135deg, #146C43 0%, #0F5132 100%);
         color: #FFFFFF;
+        transform: translateY(-1px);
     }
 
     /* Tabs Styling */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
+        gap: 10px;
+        border-bottom: 2px solid #EAECEF;
+        padding-bottom: 2px;
     }
     .stTabs [data-baseweb="tab"] {
         background-color: #FFFFFF;
-        border-radius: 8px 8px 0 0;
-        padding: 10px 20px;
+        border-radius: 10px 10px 0 0;
+        padding: 10px 22px;
         font-weight: 700;
-        border: 1px solid #E6E8EB;
+        font-size: 0.92rem;
+        border: 1px solid #EAECEF;
+        border-bottom: none;
+        color: #555555;
     }
     .stTabs [aria-selected="true"] {
-        background-color: #FFF4EB !important;
-        border-bottom: 3px solid #FF7900 !important;
+        background-color: #FFF5EC !important;
+        border-top: 3px solid #FF7900 !important;
         color: #FF7900 !important;
+    }
+
+    /* Coverage Info Box */
+    .coverage-card {
+        background: #FFF6EE;
+        border: 1px solid #FFD8B8;
+        border-radius: 10px;
+        padding: 0.75rem 1rem;
+        color: #8A3E00;
+        font-weight: 600;
+        font-size: 0.92rem;
+        text-align: center;
+    }
+
+    /* Footer */
+    .custom-footer {
+        margin-top: 3rem;
+        padding-top: 1.2rem;
+        border-top: 1px solid #E6E8EB;
+        text-align: center;
+        color: #888888;
+        font-size: 0.82rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -237,64 +320,8 @@ def generate_styled_excel(df, sheet_name):
 
     return output.getvalue()
 
-# --- One-Click Copy Component for Outlook ---
-def render_copy_button(df):
-    tsv_text = df.to_csv(sep='\t', index=False)
-    tsv_json = json.dumps(tsv_text)
-    html_code = f"""
-    <div style="width: 100%; font-family: sans-serif;">
-        <button id="copyBtn" onclick="copySchedule()" style="
-            width: 100%;
-            background-color: #1E1E1E;
-            color: #FFFFFF;
-            font-weight: 700;
-            font-size: 14px;
-            padding: 10px 16px;
-            border: 2px solid #FF7900;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        ">
-            📋 Copy Schedule for Outlook (One-Click)
-        </button>
-    </div>
-    <script>
-        function copySchedule() {{
-            const text = {tsv_json};
-            navigator.clipboard.writeText(text).then(function() {{
-                const btn = document.getElementById('copyBtn');
-                btn.innerText = '✅ Copied! Ready to Paste in Outlook';
-                btn.style.backgroundColor = '#FF7900';
-                btn.style.color = '#FFFFFF';
-                setTimeout(() => {{
-                    btn.innerText = '📋 Copy Schedule for Outlook (One-Click)';
-                    btn.style.backgroundColor = '#1E1E1E';
-                }}, 2500);
-            }});
-        }}
-    </script>
-    """
-    components.html(html_code, height=50)
-
-# --- Header UI ---
-st.markdown("""
-<div class="hero-banner">
-    <h1 class="hero-title">⚡ <span class="orange-accent">Orange Cash</span> — Inbox Shift Automator</h1>
-    <p class="hero-subtitle">Smart shift distribution, automatic agent detection, and clean Outlook-ready schedules.</p>
-</div>
-""", unsafe_allow_html=True)
-
-# --- Step 1: Schedule Mode ---
-st.markdown('<span class="step-badge">Step 1 • Shift Configuration</span>', unsafe_allow_html=True)
-mode_col1, mode_col2 = st.columns([2, 1])
-
-with mode_col1:
-    shift_mode = st.radio(
-        "Select Target Schedule Mode:",
-        options=["Males (8:01 PM - 3:00 AM)", "Females (8:00 AM - 8:00 PM)"],
-        horizontal=True
-    )
-
+# --- Step 1 Logic Setup ---
+shift_mode = st.session_state.get("shift_mode_radio", "Males (8:01 PM - 3:00 AM)")
 is_females = shift_mode.startswith("Females")
 
 if is_females:
@@ -320,13 +347,49 @@ else:
     end_time_label = "3:00 AM"
     file_prefix = "Males"
 
-with mode_col2:
-    st.info(f"🕒 **Coverage Window:** {start_time_label} ➔ {end_time_label}")
+# --- Hero Header UI ---
+st.markdown(f"""
+<div class="hero-banner">
+    <div>
+        <h1 class="hero-title">⚡ <span class="orange-accent">Orange Cash</span> — Inbox Shift Automator</h1>
+        <p class="hero-subtitle">Automated WFM attendance matching, smart exclusion handling, and balanced shift distribution.</p>
+    </div>
+    <div class="status-pill">
+        ● Active Mode: {file_prefix} ({start_time_label} – {end_time_label})
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
-st.markdown("---")
+# --- Step 1: Schedule Mode ---
+st.markdown("""
+<div class="step-header">
+    <span class="step-badge">Step 01</span>
+    <h3 class="step-title">Shift Configuration</h3>
+</div>
+""", unsafe_allow_html=True)
+
+with st.container(border=True):
+    mode_col1, mode_col2 = st.columns([2.2, 1], vertical_alignment="center")
+    with mode_col1:
+        shift_mode = st.radio(
+            "Select Target Schedule Mode:",
+            options=["Males (8:01 PM - 3:00 AM)", "Females (8:00 AM - 8:00 PM)"],
+            horizontal=True,
+            key="shift_mode_radio"
+        )
+    with mode_col2:
+        st.markdown(f'<div class="coverage-card">🕒 Window: {start_time_label} ➔ {end_time_label} ({total_target_const} mins)</div>', unsafe_allow_html=True)
+
+st.write("")
 
 # --- Step 2: Files Upload & Master List ---
-st.markdown('<span class="step-badge">Step 2 • Data Sources</span>', unsafe_allow_html=True)
+st.markdown("""
+<div class="step-header">
+    <span class="step-badge">Step 02</span>
+    <h3 class="step-title">Data Sources & Master List</h3>
+</div>
+""", unsafe_allow_html=True)
+
 col1, col2 = st.columns(2, gap="large")
 
 with col1:
@@ -433,14 +496,19 @@ if att_file is not None and df_agents is not None:
     df_filtered['Shift_clean'] = df_filtered[start_col].apply(format_shift_time)
     eligible_df = df_filtered
 
-    st.markdown("---")
-    st.markdown('<span class="step-badge">Step 3 • Exclusions & Generation</span>', unsafe_allow_html=True)
+    st.write("")
+    st.markdown("""
+    <div class="step-header">
+        <span class="step-badge">Step 03</span>
+        <h3 class="step-title">Exclusions & Generation</h3>
+    </div>
+    """, unsafe_allow_html=True)
 
     with st.container(border=True):
         st.markdown(f"#### 🔍 Detected {file_prefix} Inbox Agents ({len(eligible_df)} Eligible)")
 
         if len(eligible_df) == 0:
-            st.warning("No matching agents found for the selected mode and Attendance file. Please check the selected mode (Males/Females).")
+            st.warning("No matching agents found for the selected mode and Attendance file. Please verify the selected mode (Males/Females).")
         else:
             options_list = [
                 f"{row['Agent_clean']} ({row['PID_clean']}) — Shift: {row['Shift_clean']}"
@@ -454,15 +522,16 @@ if att_file is not None and df_agents is not None:
             excluded_options = st.multiselect(
                 "Mark agents on Assist / Task to EXCLUDE before generating:",
                 options=options_list,
-                placeholder="Choose agents to exclude (leave empty if all detected agents are working)..."
+                placeholder="Click to select agents to exclude (leave empty if all detected agents are working)..."
             )
             excluded_pids = {option_to_pid[opt] for opt in excluded_options}
 
-            gen_col1, gen_col2 = st.columns([1, 2])
+            st.write("")
+            gen_col1, gen_col2 = st.columns([1, 2.2], vertical_alignment="center")
             with gen_col1:
                 generate_clicked = st.button("🚀 Generate Final Schedule", type="primary", use_container_width=True)
             with gen_col2:
-                st.caption(f"Ready to distribute **{total_target_const} minutes** across **{len(eligible_df) - len(excluded_pids)} agents**.")
+                st.info(f"⚡ Ready to distribute **{total_target_const} minutes** across **{len(eligible_df) - len(excluded_pids)} active agents**.")
 
             if generate_clicked:
                 final_agents = eligible_df[~eligible_df['PID_clean'].isin(excluded_pids)].reset_index(drop=True)
@@ -510,9 +579,13 @@ if "schedule_df" in st.session_state:
     active_prefix = st.session_state.get("file_prefix", file_prefix)
     excluded_cnt = st.session_state.get("excluded_count", 0)
     
-    st.markdown("---")
-    st.markdown('<span class="step-badge">Step 4 • Final Output & Actions</span>', unsafe_allow_html=True)
-    st.subheader(f"📋 {active_prefix} Inbox Schedule Dashboard")
+    st.write("")
+    st.markdown("""
+    <div class="step-header">
+        <span class="step-badge">Step 04</span>
+        <h3 class="step-title">Final Schedule Dashboard</h3>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Summary Metrics Row
     m1, m2, m3, m4 = st.columns(4)
@@ -525,25 +598,31 @@ if "schedule_df" in st.session_state:
 
     # Organized Tabs
     tab_schedule, tab_emergency = st.tabs([
-        "📋 Schedule & Export",
+        "📋 Final Schedule & Export",
         "🛠️ Emergency Update (Sick / Left)"
     ])
 
     with tab_schedule:
-        st.dataframe(df_res, use_container_width=True, hide_index=True)
-
-        st.write("")
-        exp_col1, exp_col2 = st.columns(2, gap="medium")
-        with exp_col1:
-            excel_bytes = generate_styled_excel(df_res, f"{active_prefix}_Schedule")
-            st.download_button(
-                label=f"📥 Download Final {active_prefix} Excel (.xlsx)",
-                data=excel_bytes,
-                file_name=f"Final_{active_prefix}_Inbox_Schedule.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        with st.container(border=True):
+            # Highlight From/To columns softly in UI preview only
+            styled_preview = df_res.style.set_properties(
+                subset=["From", "To"],
+                **{"background-color": "#FFF7F0", "color": "#B34D00", "font-weight": "600"}
             )
-        with exp_col2:
-            render_copy_button(df_res)
+            st.dataframe(styled_preview, use_container_width=True, hide_index=True)
+
+            st.write("")
+            exp_col1, exp_col2 = st.columns([1.3, 1], vertical_alignment="center")
+            with exp_col1:
+                excel_bytes = generate_styled_excel(df_res, f"{active_prefix}_Schedule")
+                st.download_button(
+                    label=f"📥 Download Final {active_prefix} Excel (.xlsx)",
+                    data=excel_bytes,
+                    file_name=f"Final_{active_prefix}_Inbox_Schedule.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            with exp_col2:
+                st.caption(f"📄 **File:** `Final_{active_prefix}_Inbox_Schedule.xlsx` • Centered & Auto-fitted")
 
     with tab_emergency:
         with st.container(border=True):
@@ -571,6 +650,7 @@ if "schedule_df" in st.session_state:
                     format_func=lambda x: pid_to_label.get(x, x)
                 )
 
+                st.write("")
                 if st.button("⚡ Apply Update & Redistribute", type="primary"):
                     sick_idx = df_res.index[df_res["PID"].astype(str) == sick_pid].tolist()[0]
                     start_idx = df_res.index[df_res["PID"].astype(str) == start_pid].tolist()[0]
@@ -627,3 +707,10 @@ if "schedule_df" in st.session_state:
                         st.session_state["schedule_df"] = df_updated
                         st.session_state["excluded_count"] = excluded_cnt + 1
                         st.rerun()
+
+# --- Footer ---
+st.markdown("""
+<div class="custom-footer">
+    ⚡ <strong>Orange Cash Operations</strong> • Inbox Shift Automator
+</div>
+""", unsafe_allow_html=True)
