@@ -496,7 +496,7 @@ with col2:
             with st.expander("👁️ Preview / Inspect Master Agents List"):
                 st.dataframe(df_agents, use_container_width=True, hide_index=True, height=220)
 
-# --- Step 3: Automatic Agent Detection & Exclusions (Flexible Column & State Filtering) ---
+# --- Step 3: Automatic Agent Detection & Exclusions (Safe & Robust Filtering) ---
 if att_file is not None and df_agents is not None:
     df_att = load_df(att_file)
     df_att.columns = [str(c).strip() for c in df_att.columns]
@@ -527,12 +527,10 @@ if att_file is not None and df_agents is not None:
 
     df_filtered = df_att.copy()
 
-    # A. فلترة مرنة جداً لعمود الـ Schedule State بحيث يُبقي على أي حالة تحتوي على "orange cash"
+    # A. فلترة آمنة لعمود الـ Schedule State (تجنب خطأ الأرقام أو القيم الفارغة)
     if state_col:
         df_filtered[state_col] = df_filtered[state_col].astype(str).str.strip()
         df_filtered = df_filtered[df_filtered[state_col].str.lower().str.contains("orange cash", na=False)].copy()
-    else:
-        st.warning("⚠️ Warning: 'Schedule State' column not found in attendance file. Skipping state filtering.")
 
     # B. فلترة عمود الـ Team (استبعاد الجنس العكسي بناءً على الشفت المختار)
     if team_col:
