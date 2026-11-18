@@ -402,8 +402,8 @@ is_females = shift_mode.startswith("Females")
 
 if is_females:
     start_mins_const = 480     # 8:00 AM
-    end_mins_const = 1199      # غلق الشفت بحيث ينتهي تماماً عند 8:00 PM (إجمالي 720 دقيقة بدقة)
-    total_target_const = 720   # 720 mins exactly
+    end_mins_const = 1200      # 8:00 PM (Exact)
+    total_target_const = 720   # 720 mins (8:00 AM to 8:00 PM)
     start_time_label = "8:00 AM"
     end_time_label = "8:00 PM"
     file_prefix = "Females"
@@ -496,7 +496,7 @@ with col2:
             with st.expander("👁️ Preview / Inspect Master Agents List"):
                 st.dataframe(df_agents, use_container_width=True, hide_index=True, height=220)
 
-# --- Step 3: Automatic Agent Detection & Exclusions (Safe & Robust Filtering) ---
+# --- Step 3: Automatic Agent Detection & Exclusions ---
 if att_file is not None and df_agents is not None:
     df_att = load_df(att_file)
     df_att.columns = [str(c).strip() for c in df_att.columns]
@@ -513,7 +513,7 @@ if att_file is not None and df_agents is not None:
                 break
         cols_lower = {c.lower(): c for c in df_att.columns}
 
-    # Identify required columns flexibly
+    # Identify required columns
     pid_col = cols_lower.get('pid')
     agent_col = cols_lower.get('agent') or cols_lower.get('agent name')
     start_col = cols_lower.get('start time') or cols_lower.get('shift')
@@ -527,18 +527,20 @@ if att_file is not None and df_agents is not None:
 
     df_filtered = df_att.copy()
 
-    # A. فلترة آمنة لعمود الـ Schedule State (تجنب خطأ الأرقام أو القيم الفارغة)
+    # A. فلترة عمود Schedule State على Orange Cash فقط
     if state_col:
         df_filtered[state_col] = df_filtered[state_col].astype(str).str.strip()
-        df_filtered = df_filtered[df_filtered[state_col].str.lower().str.contains("orange cash", na=False)].copy()
+        df_filtered = df_filtered[df_filtered[state_col].str.lower() == "orange cash"].copy()
 
-    # B. فلترة عمود الـ Team (استبعاد الجنس العكسي بناءً على الشفت المختار)
+    # B. فلترة عمود Team باستخدام مطابقة الكلمة المستقلة (\b) حتى لا تتداخل MALE مع FEMALE
     if team_col:
         df_filtered[team_col] = df_filtered[team_col].astype(str).str.strip().str.upper()
         if is_females:
-            df_filtered = df_filtered[~df_filtered[team_col].str.contains("MALE", na=False)].copy()
+            # شفت البنات: استبعاد كلمة MALE أو MALES المستقلة فقط (مع الإبقاء على FEMALES وأي تيم آخر)
+            df_filtered = df_filtered[~df_filtered[team_col].str.contains(r'\bMALES?\b', regex=True, na=False)].copy()
         else:
-            df_filtered = df_filtered[~df_filtered[team_col].str.contains("FEMALE", na=False)].copy()
+            # شفت الولاد: استبعاد كلمة FEMALE أو FEMALES المستقلة فقط (مع الإبقاء على MALES وأي تيم آخر)
+            df_filtered = df_filtered[~df_filtered[team_col].str.contains(r'\bFEMALES?\b', regex=True, na=False)].copy()
 
     # 2. Clean and sort attendance rows by start time
     df_filtered['_sort_time'] = pd.to_datetime(df_filtered[start_col].astype(str).str.strip(), errors='coerce')
@@ -558,7 +560,7 @@ if att_file is not None and df_agents is not None:
 
     df_filtered = df_filtered[df_filtered['PID_clean'].isin(included_pids)].copy()
     
-    # Drop duplicates by PID to prevent any employee from appearing twice
+    # منع تكرار أي موظف مرتين
     df_filtered = df_filtered.drop_duplicates(subset=['PID_clean']).reset_index(drop=True)
 
     # Map INS (Profile)
@@ -586,10 +588,6 @@ if att_file is not None and df_agents is not None:
 
         if len(eligible_df) == 0:
             st.warning("No matching agents found based on Master list PIDs and filters. Please verify your files.")
-            with st.expander("🛠️ Debug Info (أعمدة الملف المكتشفة)"):
-                st.write("Columns in uploaded file:", list(df_att.columns))
-                st.write("State Column detected:", state_col)
-                st.write("Team Column detected:", team_col)
         else:
             options_list = [
                 f"{row['Agent_clean']} ({row['PID_clean']}) — Shift: {row['Shift_clean']}"
@@ -644,6 +642,11 @@ if att_file is not None and df_agents is not None:
 
                 res_df["From"] = from_list
                 res_df["To"] = to_list
+                
+                # التأكد من أن آخر موظف في شفت البنات يقفل عند 8:00 PM بالظبط
+                if is_females and len(res_df) > 0:
+                    res_df.loc[len(res_df) - 1, "To"] = "8:00 PM"
+
                 st.session_state["schedule_df"] = res_df
                 st.session_state["end_mins_lock"] = end_mins_const
                 st.session_state["start_label_lock"] = start_time_label
@@ -792,6 +795,9 @@ if "schedule_df" in st.session_state:
                             df_updated.loc[r_idx, "From"] = mins_to_time_str(curr)
                             df_updated.loc[r_idx, "To"] = mins_to_time_str(curr + d - 1)
                             curr += d
+
+                        if active_prefix == "Females" and len(df_updated) > 0:
+                            df_updated.loc[len(df_updated) - 1, "To"] = "8:00 PM"
 
                         st.session_state["schedule_df"] = df_updated
                         st.session_state["excluded_count"] = excluded_cnt + 1
