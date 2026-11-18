@@ -496,7 +496,7 @@ with col2:
             with st.expander("👁️ Preview / Inspect Master Agents List"):
                 st.dataframe(df_agents, use_container_width=True, hide_index=True, height=220)
 
-# --- Step 3: Automatic Agent Detection & Exclusions (PID Matching + Smart Gender Team Filtering) ---
+# --- Step 3: Automatic Agent Detection & Exclusions (Strict Team & Schedule State Filtering) ---
 if att_file is not None and df_agents is not None:
     df_att = load_df(att_file)
     df_att.columns = [str(c).strip() for c in df_att.columns]
@@ -518,6 +518,7 @@ if att_file is not None and df_agents is not None:
     agent_col = cols_lower.get('agent') or cols_lower.get('agent name')
     start_col = cols_lower.get('start time') or cols_lower.get('shift')
     team_col = cols_lower.get('team')
+    state_col = cols_lower.get('schedule state')
 
     missing = [name for name, col in [('Pid', pid_col), ('Agent', agent_col), ('Start Time', start_col)] if not col]
     if missing:
@@ -526,14 +527,19 @@ if att_file is not None and df_agents is not None:
 
     df_filtered = df_att.copy()
 
-    # Smart Gender Team Filtering (حذف جنس العكس من عمود الـ Team إن وجد)
+    # A. فلترة عمود الـ Schedule State بحيث يُبقي على Orange Cash فقط
+    if state_col:
+        df_filtered[state_col] = df_filtered[state_col].astype(str).str.strip()
+        df_filtered = df_filtered[df_filtered[state_col].str.lower() == "orange cash"].copy()
+
+    # B. فلترة عمود الـ Team (استبعاد الجنس العكسي بناءً على الشفت المختار)
     if team_col:
         df_filtered[team_col] = df_filtered[team_col].astype(str).str.strip().str.upper()
         if is_females:
-            # شفت البنات: نحذف أي صف يحتوي على كلمة MALE في قسم الـ Team
+            # شفت البنات: نحذف أي فريق يحتوي على كلمة MALE
             df_filtered = df_filtered[~df_filtered[team_col].str.contains("MALE", na=False)].copy()
         else:
-            # شفت الولاد: نحذف أي صف يحتوي على كلمة FEMALE في قسم الـ Team
+            # شفت الولاد: نحذف أي فريق يحتوي على كلمة FEMALE
             df_filtered = df_filtered[~df_filtered[team_col].str.contains("FEMALE", na=False)].copy()
 
     # 2. Clean and sort attendance rows by start time
@@ -655,152 +661,4 @@ if att_file is not None and df_agents is not None:
 
 # --- Step 4: Tabbed Results (Schedule & Export / Emergency Update) ---
 if "schedule_df" in st.session_state:
-    df_res = st.session_state["schedule_df"]
-    active_end_mins = st.session_state.get("end_mins_lock", end_mins_const)
-    active_start_label = st.session_state.get("start_label_lock", start_time_label)
-    active_end_label = st.session_state.get("end_label_lock", end_time_label)
-    active_prefix = st.session_state.get("file_prefix", file_prefix)
-    excluded_cnt = st.session_state.get("excluded_count", 0)
-    
-    st.write("")
-    st.markdown("""
-    <div class="step-header">
-        <span class="step-badge">Step 04</span>
-        <h3 class="step-title">Final Schedule Dashboard</h3>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Summary Metrics Row
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("👥 Scheduled Agents", f"{len(df_res)} Agents")
-    m2.metric("🚫 Excluded (Task/Assist/Sick)", f"{excluded_cnt} Agents")
-    m3.metric("🟢 Start Time", active_start_label)
-    m4.metric("🔒 Locked End Time", active_end_label)
-
-    st.write("")
-
-    # Organized Tabs
-    tab_schedule, tab_emergency = st.tabs([
-        "📋 Final Schedule & Export",
-        "🛠️ Emergency Update (Sick / Left)"
-    ])
-
-    with tab_schedule:
-        with st.container(border=True):
-            styled_preview = df_res.style.set_properties(
-                subset=["From", "To"],
-                **{"background-color": "#FFF7F0", "color": "#B34D00", "font-weight": "600"}
-            )
-            st.dataframe(styled_preview, use_container_width=True, hide_index=True)
-
-            st.write("")
-            exp_col1, exp_col2 = st.columns([1.3, 1], vertical_alignment="center")
-            with exp_col1:
-                excel_bytes = generate_styled_excel(df_res, f"{active_prefix}_Schedule")
-                st.download_button(
-                    label=f"📥 Download Final {active_prefix} Excel (.xlsx)",
-                    data=excel_bytes,
-                    file_name=f"Final_{active_prefix}_Inbox_Schedule.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            with exp_col2:
-                st.caption(f"📄 **File:** `Final_{active_prefix}_Inbox_Schedule.xlsx` • Centered & Auto-fitted")
-
-    with tab_emergency:
-        with st.container(border=True):
-            st.markdown("#### 🛠️ Remove Agent & Redistribute Minutes")
-            st.caption("Select an agent who became Sick or Left early. Their assigned minutes will be evenly redistributed until the end of the shift.")
-            
-            if len(df_res) <= 1:
-                st.warning("Not enough agents remaining in the schedule to perform redistribution.")
-            else:
-                pids_list = df_res["PID"].astype(str).tolist()
-                pid_to_label = {
-                    str(row["PID"]): f"{row['PID']} — {row['Agent Name']} ({row['From']} to {row['To']})"
-                    for _, row in df_res.iterrows()
-                }
-                
-                em_c1, em_c2 = st.columns(2)
-                sick_pid = em_c1.selectbox(
-                    "1. Select Agent to Remove (Sick / Left):",
-                    options=pids_list,
-                    format_func=lambda x: pid_to_label.get(x, x)
-                )
-                start_pid = em_c2.selectbox(
-                    "2. Start Redistribution From:",
-                    options=pids_list,
-                    format_func=lambda x: pid_to_label.get(x, x)
-                )
-
-                st.write("")
-                if st.button("⚡ Apply Update & Redistribute", type="primary"):
-                    sick_idx = df_res.index[df_res["PID"].astype(str) == sick_pid].tolist()[0]
-                    start_idx = df_res.index[df_res["PID"].astype(str) == start_pid].tolist()[0]
-                    end_idx = len(df_res) - 1
-
-                    if start_idx == end_idx and sick_idx == end_idx:
-                        st.error("Error: The excluded agent is the last agent in the schedule with no subsequent agents to redistribute to!")
-                    else:
-                        effective_start_idx = min(start_idx, sick_idx) if start_idx > sick_idx else start_idx
-                        
-                        s_from = time_str_to_abs_mins(df_res.loc[sick_idx, "From"])
-                        s_to = time_str_to_abs_mins(df_res.loc[sick_idx, "To"])
-                        if s_to < s_from: s_to += 1440
-                        freed_mins = s_to - s_from + 1
-
-                        base_start_mins = time_str_to_abs_mins(df_res.loc[effective_start_idx, "From"])
-
-                        total_target_mins = freed_mins
-                        for i in range(effective_start_idx, end_idx + 1):
-                            if i != sick_idx:
-                                r_from = time_str_to_abs_mins(df_res.loc[i, "From"])
-                                r_to = time_str_to_abs_mins(df_res.loc[i, "To"])
-                                if r_to < r_from: r_to += 1440
-                                total_target_mins += (r_to - r_from + 1)
-
-                        max_mins = (active_end_mins + 1) - base_start_mins
-                        if total_target_mins > max_mins > 0:
-                            total_target_mins = max_mins
-
-                        df_updated = df_res.drop(index=sick_idx).reset_index(drop=True)
-                        
-                        if sick_idx == effective_start_idx:
-                            new_start_idx = effective_start_idx
-                        else:
-                            start_pid_actual = df_res.loc[effective_start_idx, "PID"]
-                            new_start_idx = df_updated.index[df_updated["PID"].astype(str) == str(start_pid_actual)].tolist()[0]
-                        
-                        new_end_idx = len(df_updated) - 1
-
-                        target_count = new_end_idx - new_start_idx + 1
-                        d_base = total_target_mins // target_count
-                        rem_mins = total_target_mins % target_count
-
-                        durations = [d_base + 1 if i >= (target_count - rem_mins) else d_base for i in range(target_count)]
-
-                        curr = base_start_mins
-                        for i, d in enumerate(durations):
-                            r_idx = new_start_idx + i
-                            df_updated.loc[r_idx, "From"] = mins_to_time_str(curr)
-                            df_updated.loc[r_idx, "To"] = mins_to_time_str(curr + d - 1)
-                            curr += d
-
-                        st.session_state["schedule_df"] = df_updated
-                        st.session_state["excluded_count"] = excluded_cnt + 1
-
-                        excel_out = generate_styled_excel(df_updated, f"{active_prefix}_Schedule")
-                        dispatch_schedule_logs(
-                            df=df_updated,
-                            mode_label=active_prefix,
-                            action_type=f"Emergency Update (Removed PID {sick_pid})",
-                            excel_bytes=excel_out,
-                            filename=f"Final_{active_prefix}_Inbox_Schedule.xlsx"
-                        )
-                        st.rerun()
-
-# --- Footer ---
-st.markdown("""
-<div class="custom-footer">
-    ⚡ <strong>Orange Cash Operations</strong> • Inbox Shift Automator
-</div>
-""", unsafe_allow_html=True)
+    df_res = st
