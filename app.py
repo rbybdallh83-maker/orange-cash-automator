@@ -229,20 +229,52 @@ def time_str_to_abs_mins(t_str):
         m += 1440
     return m
 
-def calculate_initial_shifts(n, total_target, reverse_weight=False):
+def calculate_initial_shifts(n, total_target, is_female=False):
     if n == 0:
         return []
     
-    # حساب التوزيع الأساسي بالتساوي
+    # Standard allowed intervals based on business logic: 10, 15, 20, 30
+    allowed_steps = [10, 15, 20, 30]
+    
+    # Base split
     base = total_target // n
     rem = total_target % n
+    
+    # Start with base distributions
     durations = [base + 1 if i < rem else base for i in range(n)]
     
-    # لو العكس مطلوب (لبداية الشفت للبنات): نعكس اتجاه إضافة الدقائق الإضافية لتبدأ من الأوائل
-    if reverse_weight:
-        durations = durations[::-1]
+    # Refine towards standard blocks (10, 15, 20, 30) intelligently if close
+    refined = []
+    current_sum = 0
+    for i, d in enumerate(durations):
+        if i == n - 1:
+            # Last agent takes remaining exact minutes to ensure perfect alignment
+            step = total_target - current_sum
+        else:
+            # Find closest standard interval
+            step = min(allowed_steps, key=lambda x: abs(x - d))
+            # Fallback for edge cases where standard steps might drift too far
+            if abs(step - d) > 7:
+                step = d
+        refined.append(step)
+        current_sum += step
         
-    return durations
+    # If sum doesn't match total_target due to strict rounding, adjust the middle/last elements
+    diff = total_target - sum(refined)
+    if diff != 0:
+        refined[-1] += diff
+
+    # Ordering based on gender logic:
+    # Females: Longer intervals (30, 20) at the start (morning), shorter (15, 10) towards the end.
+    # Males: Shorter intervals (10, 15) at the start, longer (20, 30) towards the end.
+    if is_female:
+        # Sort descending so longest blocks come first
+        refined.sort(reverse=True)
+    else:
+        # Sort ascending so shortest blocks come first
+        refined.sort(reverse=False)
+        
+    return refined
 
 def extract_pid_and_name(val):
     val_str = str(val).strip()
@@ -375,7 +407,6 @@ if is_females:
     start_time_label = "8:00 AM"
     end_time_label = "8:00 PM"
     file_prefix = "Females"
-    reverse_durations = True   # البداية بالأنفاق الأطول أولاً للبنات
 else:
     start_mins_const = 1201    # 8:01 PM
     end_mins_const = 1620      # 3:00 AM (next day)
@@ -383,7 +414,6 @@ else:
     start_time_label = "8:01 PM"
     end_time_label = "3:00 AM"
     file_prefix = "Males"
-    reverse_durations = False  # البداية بالأقصر والزيادة للآخر للولاد
 
 # --- Hero Header UI ---
 st.markdown(f"""
@@ -578,7 +608,7 @@ if att_file is not None and df_agents is not None:
             with gen_col1:
                 generate_clicked = st.button("🚀 Generate Final Schedule", type="primary", use_container_width=True)
             with gen_col2:
-                st.info(f"⚡ Ready to distribute **{total_target_const} minutes** across **{len(eligible_df) - len(excluded_pids)} active agents**.")
+                st.info(f"⚡ Ready to distribute **{total_target_const} minutes** across **{len(eligible_df) - len(excluded_pids)} active agents** using standard blocks (10, 15, 20, 30 mins).")
 
             if generate_clicked:
                 final_agents = eligible_df[~eligible_df['PID_clean'].isin(excluded_pids)].reset_index(drop=True)
@@ -597,9 +627,9 @@ if att_file is not None and df_agents is not None:
                         "Shift": final_agents['Shift_clean']
                     })
 
-                # Calculate and distribute shifts with reverse logic support for females
+                # Calculate and distribute shifts using standard intervals (10, 15, 20, 30)
                 n = len(res_df)
-                durations = calculate_initial_shifts(n, total_target_const, reverse_weight=reverse_durations)
+                durations = calculate_initial_shifts(n, total_target_const, is_female=is_females)
 
                 current_mins = start_mins_const
                 from_list, to_list = [], []
