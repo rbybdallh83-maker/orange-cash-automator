@@ -402,7 +402,7 @@ is_females = shift_mode.startswith("Females")
 
 if is_females:
     start_mins_const = 480     # 8:00 AM
-    end_mins_const = 1200      # 8:00 PM (Exact)
+    end_mins_const = 1199      # غلق الشفت بحيث ينتهي تماماً عند 8:00 PM (إجمالي 720 دقيقة بدقة)
     total_target_const = 720   # 720 mins exactly
     start_time_label = "8:00 AM"
     end_time_label = "8:00 PM"
@@ -496,7 +496,7 @@ with col2:
             with st.expander("👁️ Preview / Inspect Master Agents List"):
                 st.dataframe(df_agents, use_container_width=True, hide_index=True, height=220)
 
-# --- Step 3: Automatic Agent Detection & Exclusions (PID Matching Only without Team Filtering) ---
+# --- Step 3: Automatic Agent Detection & Exclusions (PID Matching + Smart Gender Team Filtering) ---
 if att_file is not None and df_agents is not None:
     df_att = load_df(att_file)
     df_att.columns = [str(c).strip() for c in df_att.columns]
@@ -517,18 +517,30 @@ if att_file is not None and df_agents is not None:
     pid_col = cols_lower.get('pid')
     agent_col = cols_lower.get('agent') or cols_lower.get('agent name')
     start_col = cols_lower.get('start time') or cols_lower.get('shift')
+    team_col = cols_lower.get('team')
 
     missing = [name for name, col in [('Pid', pid_col), ('Agent', agent_col), ('Start Time', start_col)] if not col]
     if missing:
         st.error(f"⚠️ Missing required columns in the Attendance file: **{', '.join(missing)}**")
         st.stop()
 
-    # 2. Clean and sort attendance rows by start time
     df_filtered = df_att.copy()
+
+    # Smart Gender Team Filtering (حذف جنس العكس من عمود الـ Team إن وجد)
+    if team_col:
+        df_filtered[team_col] = df_filtered[team_col].astype(str).str.strip().str.upper()
+        if is_females:
+            # شفت البنات: نحذف أي صف يحتوي على كلمة MALE في قسم الـ Team
+            df_filtered = df_filtered[~df_filtered[team_col].str.contains("MALE", na=False)].copy()
+        else:
+            # شفت الولاد: نحذف أي صف يحتوي على كلمة FEMALE في قسم الـ Team
+            df_filtered = df_filtered[~df_filtered[team_col].str.contains("FEMALE", na=False)].copy()
+
+    # 2. Clean and sort attendance rows by start time
     df_filtered['_sort_time'] = pd.to_datetime(df_filtered[start_col].astype(str).str.strip(), errors='coerce')
     df_filtered = df_filtered.sort_values(by=['_sort_time', pid_col], ascending=[True, True]).copy()
 
-    # 3. Match with Master Agents file (PID-only matching without filtering by team name)
+    # 3. Match with Master Agents file (PID matching)
     df_filtered['PID_clean'] = df_filtered[pid_col].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
 
     df_agents_clean = df_agents.copy()
@@ -540,7 +552,6 @@ if att_file is not None and df_agents is not None:
     df_agents_clean['PID_clean'] = df_agents_clean[agents_pid_col].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
     included_pids = set(df_agents_clean['PID_clean'])
 
-    # Filter attendance rows that exist in master list
     df_filtered = df_filtered[df_filtered['PID_clean'].isin(included_pids)].copy()
     
     # Drop duplicates by PID to prevent any employee from appearing twice
@@ -570,7 +581,7 @@ if att_file is not None and df_agents is not None:
         st.markdown(f"#### 🔍 Detected {file_prefix} Inbox Agents ({len(eligible_df)} Eligible)")
 
         if len(eligible_df) == 0:
-            st.warning("No matching agents found based on Master list PIDs. Please verify your files.")
+            st.warning("No matching agents found based on Master list PIDs and filters. Please verify your files.")
         else:
             options_list = [
                 f"{row['Agent_clean']} ({row['PID_clean']}) — Shift: {row['Shift_clean']}"
