@@ -233,37 +233,21 @@ def calculate_initial_shifts(n, total_target, is_female=False):
     if n == 0:
         return []
     
-    allowed_steps = [10, 15, 20, 30]
+    # حساب المدة الأساسية لكل موظف لضمان تغطية الوقت بالكامل بدقة
     base = total_target // n
     rem = total_target % n
     
     durations = [base + 1 if i < rem else base for i in range(n)]
     
-    refined = []
-    current_sum = 0
-    for i, d in enumerate(durations):
-        if i == n - 1:
-            step = total_target - current_sum
-        else:
-            step = min(allowed_steps, key=lambda x: abs(x - d))
-            if abs(step - d) > 8:
-                step = d
-        refined.append(step)
-        current_sum += step
-        
-    diff = total_target - sum(refined)
-    if diff != 0:
-        refined[-1] += diff
-
-    # ترتيب الانترفالات:
-    # البنات: تبدأ بالمدد الكبيرة في الصباح وتتدرج للأصغر حتى المساء
-    # الولاد: تبدأ بالمدد الصغار وتتدرج للكبيرة في النهاية
     if is_female:
-        refined.sort(reverse=True)
+        # للبنات: نبدأ بالفترات الأكبر في أول الشفت وتتدرج للأصغر حتى النهاية
+        # نقوم بترتيب المدد تنازلياً بحيث الأطول أولاً
+        durations.sort(reverse=True)
     else:
-        refined.sort(reverse=False)
+        # للولاد: تبدأ بالفترات الأصغر وتزيد تدريجياً للنهاية
+        durations.sort(reverse=False)
         
-    return refined
+    return durations
 
 def extract_pid_and_name(val):
     val_str = str(val).strip()
@@ -391,8 +375,8 @@ is_females = shift_mode.startswith("Females")
 
 if is_females:
     start_mins_const = 480     # 8:00 AM دقیقاً
-    end_mins_const = 1200      # 8:00 PM دقیقاً
-    total_target_const = 720   # 720 دقيقة (من 8:00 ص إلى 8:00 م)
+    end_mins_const = 1200      # 8:00 PM دقیقاً (نهاية الشفت)
+    total_target_const = 720   # 720 دقيقة صافية (من 8:00 ص إلى 8:00 م)
     start_time_label = "8:00 AM"
     end_time_label = "8:00 PM"
     file_prefix = "Females"
@@ -597,7 +581,7 @@ if att_file is not None and df_agents is not None:
             with gen_col1:
                 generate_clicked = st.button("🚀 Generate Final Schedule", type="primary", use_container_width=True)
             with gen_col2:
-                st.info(f"⚡ Ready to distribute **{total_target_const} minutes** across **{len(eligible_df) - len(excluded_pids)} active agents** starting strictly from {start_time_label}.")
+                st.info(f"⚡ Ready to distribute exactly **{total_target_const} minutes** across **{len(eligible_df) - len(excluded_pids)} active agents** from {start_time_label} to {end_time_label}.")
 
             if generate_clicked:
                 final_agents = eligible_df[~eligible_df['PID_clean'].isin(excluded_pids)].reset_index(drop=True)
@@ -616,7 +600,7 @@ if att_file is not None and df_agents is not None:
                         "Shift": final_agents['Shift_clean']
                     })
 
-                # Calculate and distribute shifts cleanly from start_mins_const
+                # حساب وترتيب المدد الزمنية بتتابع دقيق يضمن عدم تجاوز وقت النهاية
                 n = len(res_df)
                 durations = calculate_initial_shifts(n, total_target_const, is_female=is_females)
 
@@ -630,6 +614,10 @@ if att_file is not None and df_agents is not None:
                 res_df["From"] = from_list
                 res_df["To"] = to_list
                 
+                # تأكيد صارم لختام شفت البنات عند 8:00 PM بالدقيقة الأخيرة بالضبط
+                if is_females and len(res_df) > 0:
+                    res_df.loc[len(res_df) - 1, "To"] = end_time_label
+
                 st.session_state["schedule_df"] = res_df
                 st.session_state["end_mins_lock"] = end_mins_const
                 st.session_state["start_label_lock"] = start_time_label
@@ -779,6 +767,9 @@ if "schedule_df" in st.session_state:
                             df_updated.loc[r_idx, "To"] = mins_to_time_str(curr + d - 1)
                             curr += d
 
+                        if active_prefix == "Females" and len(df_updated) > 0:
+                            df_updated.loc[len(df_updated) - 1, "To"] = active_end_label
+
                         st.session_state["schedule_df"] = df_updated
                         st.session_state["excluded_count"] = excluded_cnt + 1
 
@@ -793,7 +784,7 @@ if "schedule_df" in st.session_state:
                         st.rerun()
 
 # --- Footer ---
-st.print_footer = st.markdown("""
+st.markdown("""
 <div class="custom-footer">
     ⚡ <strong>Orange Cash Operations</strong> • Inbox Shift Automator
 </div>
