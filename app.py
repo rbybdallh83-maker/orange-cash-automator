@@ -229,51 +229,19 @@ def time_str_to_abs_mins(t_str):
         m += 1440
     return m
 
-def calculate_initial_shifts(n, total_target):
+def calculate_initial_shifts(n, total_target, reverse_weight=False):
     if n == 0:
         return []
     
-    if 15 * n == total_target:
-        durations = [15] * n
-    elif 15 * n < total_target:
-        durations = [15] * n
-        diff = total_target - (15 * n)
-        for i in range(n - 1, -1, -1):
-            if diff >= 5:
-                durations[i] = 20
-                diff -= 5
-            elif diff > 0:
-                durations[i] += diff
-                diff = 0
-            if diff == 0:
-                break
-        while diff > 0:
-            for i in range(n - 1, -1, -1):
-                durations[i] += 1
-                diff -= 1
-                if diff == 0:
-                    break
-    else:
-        durations = [10] * n
-        diff = total_target - (10 * n)
-        if diff >= 0:
-            for i in range(n - 1, -1, -1):
-                if diff >= 5:
-                    durations[i] = 15
-                    diff -= 5
-                elif diff > 0:
-                    durations[i] += diff
-                    diff = 0
-                if diff == 0:
-                    break
-        else:
-            while diff < 0:
-                for i in range(n - 1, -1, -1):
-                    if durations[i] > 3:
-                        durations[i] -= 1
-                        diff += 1
-                        if diff == 0:
-                            break
+    # حساب التوزيع الأساسي بالتساوي
+    base = total_target // n
+    rem = total_target % n
+    durations = [base + 1 if i < rem else base for i in range(n)]
+    
+    # لو العكس مطلوب (لبداية الشفت للبنات): نعكس اتجاه إضافة الدقائق الإضافية لتبدأ من الأوائل
+    if reverse_weight:
+        durations = durations[::-1]
+        
     return durations
 
 def extract_pid_and_name(val):
@@ -407,6 +375,7 @@ if is_females:
     start_time_label = "8:00 AM"
     end_time_label = "8:00 PM"
     file_prefix = "Females"
+    reverse_durations = True   # البداية بالأنفاق الأطول أولاً للبنات
 else:
     start_mins_const = 1201    # 8:01 PM
     end_mins_const = 1620      # 3:00 AM (next day)
@@ -414,6 +383,7 @@ else:
     start_time_label = "8:01 PM"
     end_time_label = "3:00 AM"
     file_prefix = "Males"
+    reverse_durations = False  # البداية بالأقصر والزيادة للآخر للولاد
 
 # --- Hero Header UI ---
 st.markdown(f"""
@@ -532,14 +502,12 @@ if att_file is not None and df_agents is not None:
         df_filtered[state_col] = df_filtered[state_col].astype(str).str.strip()
         df_filtered = df_filtered[df_filtered[state_col].str.lower() == "orange cash"].copy()
 
-    # B. فلترة عمود Team باستخدام مطابقة الكلمة المستقلة (\b) حتى لا تتداخل MALE مع FEMALE
+    # B. فلترة عمود Team باستخدام مطابقة الكلمة المستقلة (\b) لتفادي تداخل MALE مع FEMALE
     if team_col:
         df_filtered[team_col] = df_filtered[team_col].astype(str).str.strip().str.upper()
         if is_females:
-            # شفت البنات: استبعاد كلمة MALE أو MALES المستقلة فقط (مع الإبقاء على FEMALES وأي تيم آخر)
             df_filtered = df_filtered[~df_filtered[team_col].str.contains(r'\bMALES?\b', regex=True, na=False)].copy()
         else:
-            # شفت الولاد: استبعاد كلمة FEMALE أو FEMALES المستقلة فقط (مع الإبقاء على MALES وأي تيم آخر)
             df_filtered = df_filtered[~df_filtered[team_col].str.contains(r'\bFEMALES?\b', regex=True, na=False)].copy()
 
     # 2. Clean and sort attendance rows by start time
@@ -560,7 +528,7 @@ if att_file is not None and df_agents is not None:
 
     df_filtered = df_filtered[df_filtered['PID_clean'].isin(included_pids)].copy()
     
-    # منع تكرار أي موظف مرتين
+    # منع تكرار الموظف
     df_filtered = df_filtered.drop_duplicates(subset=['PID_clean']).reset_index(drop=True)
 
     # Map INS (Profile)
@@ -629,9 +597,9 @@ if att_file is not None and df_agents is not None:
                         "Shift": final_agents['Shift_clean']
                     })
 
-                # Calculate and distribute shifts
+                # Calculate and distribute shifts with reverse logic support for females
                 n = len(res_df)
-                durations = calculate_initial_shifts(n, total_target_const)
+                durations = calculate_initial_shifts(n, total_target_const, reverse_weight=reverse_durations)
 
                 current_mins = start_mins_const
                 from_list, to_list = [], []
@@ -643,7 +611,7 @@ if att_file is not None and df_agents is not None:
                 res_df["From"] = from_list
                 res_df["To"] = to_list
                 
-                # التأكد من أن آخر موظف في شفت البنات يقفل عند 8:00 PM بالظبط
+                # إغلاق شفت البنات عند 8:00 PM بالظبط
                 if is_females and len(res_df) > 0:
                     res_df.loc[len(res_df) - 1, "To"] = "8:00 PM"
 
