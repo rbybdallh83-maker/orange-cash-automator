@@ -233,45 +233,34 @@ def calculate_initial_shifts(n, total_target, is_female=False):
     if n == 0:
         return []
     
-    # Standard allowed intervals based on business logic: 10, 15, 20, 30
     allowed_steps = [10, 15, 20, 30]
-    
-    # Base split
     base = total_target // n
     rem = total_target % n
     
-    # Start with base distributions
     durations = [base + 1 if i < rem else base for i in range(n)]
     
-    # Refine towards standard blocks (10, 15, 20, 30) intelligently if close
     refined = []
     current_sum = 0
     for i, d in enumerate(durations):
         if i == n - 1:
-            # Last agent takes remaining exact minutes to ensure perfect alignment
             step = total_target - current_sum
         else:
-            # Find closest standard interval
             step = min(allowed_steps, key=lambda x: abs(x - d))
-            # Fallback for edge cases where standard steps might drift too far
-            if abs(step - d) > 7:
+            if abs(step - d) > 8:
                 step = d
         refined.append(step)
         current_sum += step
         
-    # If sum doesn't match total_target due to strict rounding, adjust the middle/last elements
     diff = total_target - sum(refined)
     if diff != 0:
         refined[-1] += diff
 
-    # Ordering based on gender logic:
-    # Females: Longer intervals (30, 20) at the start (morning), shorter (15, 10) towards the end.
-    # Males: Shorter intervals (10, 15) at the start, longer (20, 30) towards the end.
+    # ترتيب الانترفالات:
+    # البنات: تبدأ بالمدد الكبيرة في الصباح وتتدرج للأصغر حتى المساء
+    # الولاد: تبدأ بالمدد الصغار وتتدرج للكبيرة في النهاية
     if is_female:
-        # Sort descending so longest blocks come first
         refined.sort(reverse=True)
     else:
-        # Sort ascending so shortest blocks come first
         refined.sort(reverse=False)
         
     return refined
@@ -401,16 +390,16 @@ shift_mode = st.session_state.get("shift_mode_radio", "Males (8:01 PM - 3:00 AM)
 is_females = shift_mode.startswith("Females")
 
 if is_females:
-    start_mins_const = 480     # 8:00 AM
-    end_mins_const = 1200      # 8:00 PM (Exact)
-    total_target_const = 720   # 720 mins (8:00 AM to 8:00 PM)
+    start_mins_const = 480     # 8:00 AM دقیقاً
+    end_mins_const = 1200      # 8:00 PM دقیقاً
+    total_target_const = 720   # 720 دقيقة (من 8:00 ص إلى 8:00 م)
     start_time_label = "8:00 AM"
     end_time_label = "8:00 PM"
     file_prefix = "Females"
 else:
     start_mins_const = 1201    # 8:01 PM
     end_mins_const = 1620      # 3:00 AM (next day)
-    total_target_const = 420   # 420 mins
+    total_target_const = 420   # 420 دقيقة
     start_time_label = "8:01 PM"
     end_time_label = "3:00 AM"
     file_prefix = "Males"
@@ -608,7 +597,7 @@ if att_file is not None and df_agents is not None:
             with gen_col1:
                 generate_clicked = st.button("🚀 Generate Final Schedule", type="primary", use_container_width=True)
             with gen_col2:
-                st.info(f"⚡ Ready to distribute **{total_target_const} minutes** across **{len(eligible_df) - len(excluded_pids)} active agents** using standard blocks (10, 15, 20, 30 mins).")
+                st.info(f"⚡ Ready to distribute **{total_target_const} minutes** across **{len(eligible_df) - len(excluded_pids)} active agents** starting strictly from {start_time_label}.")
 
             if generate_clicked:
                 final_agents = eligible_df[~eligible_df['PID_clean'].isin(excluded_pids)].reset_index(drop=True)
@@ -627,7 +616,7 @@ if att_file is not None and df_agents is not None:
                         "Shift": final_agents['Shift_clean']
                     })
 
-                # Calculate and distribute shifts using standard intervals (10, 15, 20, 30)
+                # Calculate and distribute shifts cleanly from start_mins_const
                 n = len(res_df)
                 durations = calculate_initial_shifts(n, total_target_const, is_female=is_females)
 
@@ -641,10 +630,6 @@ if att_file is not None and df_agents is not None:
                 res_df["From"] = from_list
                 res_df["To"] = to_list
                 
-                # إغلاق شفت البنات عند 8:00 PM بالظبط
-                if is_females and len(res_df) > 0:
-                    res_df.loc[len(res_df) - 1, "To"] = "8:00 PM"
-
                 st.session_state["schedule_df"] = res_df
                 st.session_state["end_mins_lock"] = end_mins_const
                 st.session_state["start_label_lock"] = start_time_label
@@ -794,9 +779,6 @@ if "schedule_df" in st.session_state:
                             df_updated.loc[r_idx, "To"] = mins_to_time_str(curr + d - 1)
                             curr += d
 
-                        if active_prefix == "Females" and len(df_updated) > 0:
-                            df_updated.loc[len(df_updated) - 1, "To"] = "8:00 PM"
-
                         st.session_state["schedule_df"] = df_updated
                         st.session_state["excluded_count"] = excluded_cnt + 1
 
@@ -811,7 +793,7 @@ if "schedule_df" in st.session_state:
                         st.rerun()
 
 # --- Footer ---
-st.markdown("""
+st.print_footer = st.markdown("""
 <div class="custom-footer">
     ⚡ <strong>Orange Cash Operations</strong> • Inbox Shift Automator
 </div>
