@@ -141,7 +141,7 @@ st.markdown("""
         transition: all 0.2s ease;
     }
     .stButton > button[kind="primary"]:hover {
-        background: linear-gradient(135deg, #E56700 0%, #CC5800 100%);
+        background: linear-gradient(135deg, #E56700 100%, #CC5800 100%);
         box-shadow: 0 6px 18px rgba(255, 121, 0, 0.4);
         transform: translateY(-1px);
     }
@@ -233,18 +233,42 @@ def calculate_initial_shifts(n, total_target, is_female=False):
     if n == 0:
         return []
     
-    # حساب المدة الأساسية لكل موظف لضمان تغطية الوقت بالكامل بدقة
-    base = total_target // n
-    rem = total_target % n
+    # الانترفالات القياسية المتاحة حسب الطلب: 10, 15, 20, 30 دقيقة
+    allowed_steps = [10, 15, 20, 30]
     
-    durations = [base + 1 if i < rem else base for i in range(n)]
+    # توليد توزيع مبدئي باستخدام الانترفالات القياسية بناءً على إجمالي الوقت وعدد الموظفين
+    durations = []
+    remaining_mins = total_target
+    remaining_agents = n
     
+    for i in range(n):
+        if remaining_agents == 1:
+            durations.append(remaining_mins)
+            break
+            
+        # تقدير المدة المناسبة للعضو الحالي
+        target_avg = remaining_mins / remaining_agents
+        # اختيار أقرب انترفال قياسي متاح
+        best_step = min(allowed_steps, key=lambda x: abs(x - target_avg))
+        
+        # التأكد من بقاء دقائق كافية لباقي الموظفين (بحد أدنى 10 دقائق لكل منهم)
+        while best_step > remaining_mins - (remaining_agents - 1) * 10 and best_step > 10:
+            smaller_steps = [s for s in allowed_steps if s < best_step]
+            if smaller_steps:
+                best_step = max(smaller_steps)
+            else:
+                break
+                
+        durations.append(best_step)
+        remaining_mins -= best_step
+        remaining_agents -= 1
+
+    # ضبط الترتيب الذكي حسب الشفت:
+    # للبنات: نبدأ بالمدد الكبيرة (30, 20) في أول الشفت وتتدرج للأصغر (15, 10) في النهاية
+    # للولاد: تبدأ بالمدد الصغيرة (10, 15) وتزيد تدريجياً لتصل إلى الكبيرة في النهاية
     if is_female:
-        # للبنات: نبدأ بالفترات الأكبر في أول الشفت وتتدرج للأصغر حتى النهاية
-        # نقوم بترتيب المدد تنازلياً بحيث الأطول أولاً
         durations.sort(reverse=True)
     else:
-        # للولاد: تبدأ بالفترات الأصغر وتزيد تدريجياً للنهاية
         durations.sort(reverse=False)
         
     return durations
@@ -375,7 +399,7 @@ is_females = shift_mode.startswith("Females")
 
 if is_females:
     start_mins_const = 480     # 8:00 AM دقیقاً
-    end_mins_const = 1200      # 8:00 PM دقیقاً (نهاية الشفت)
+    end_mins_const = 1200      # 8:00 PM دقیقاً
     total_target_const = 720   # 720 دقيقة صافية (من 8:00 ص إلى 8:00 م)
     start_time_label = "8:00 AM"
     end_time_label = "8:00 PM"
@@ -581,7 +605,7 @@ if att_file is not None and df_agents is not None:
             with gen_col1:
                 generate_clicked = st.button("🚀 Generate Final Schedule", type="primary", use_container_width=True)
             with gen_col2:
-                st.info(f"⚡ Ready to distribute exactly **{total_target_const} minutes** across **{len(eligible_df) - len(excluded_pids)} active agents** from {start_time_label} to {end_time_label}.")
+                st.info(f"⚡ Ready to distribute **{total_target_const} minutes** across **{len(eligible_df) - len(excluded_pids)} active agents** using standard intervals (10, 15, 20, 30 mins).")
 
             if generate_clicked:
                 final_agents = eligible_df[~eligible_df['PID_clean'].isin(excluded_pids)].reset_index(drop=True)
@@ -600,7 +624,7 @@ if att_file is not None and df_agents is not None:
                         "Shift": final_agents['Shift_clean']
                     })
 
-                # حساب وترتيب المدد الزمنية بتتابع دقيق يضمن عدم تجاوز وقت النهاية
+                # حساب وتوزيع الانترفالات القياسية (10, 15, 20, 30) وترتيبها تصاعدياً/تنازلياً
                 n = len(res_df)
                 durations = calculate_initial_shifts(n, total_target_const, is_female=is_females)
 
