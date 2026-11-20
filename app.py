@@ -229,70 +229,65 @@ def time_str_to_abs_mins(t_str):
         m += 1440
     return m
 
-def _fit_segment_durations(count, seg_mins, pool, prefer_large=False):
-    """Distribute `seg_mins` across `count` agents using preferred intervals (10, 15, 20 or 25, 30, 35, 40, 45, 50)."""
-    if count <= 0 or seg_mins <= 0:
-        return []
-    if count == 1:
-        return [seg_mins]
-
-    avg = seg_mins / count
-    if avg < min(pool):
-        base_step = 10 if avg <= 12.5 else 15
-    elif avg > max(pool):
-        base_step = max(5, int(round(avg / 5) * 5))
-    else:
-        base_step = min(pool, key=lambda x: abs(x - avg))
-
-    durs = [base_step] * count
-    diff = seg_mins - sum(durs)
-
-    # Distribute diff in 5-minute steps where reasonable
-    idx = 0 if prefer_large else count - 1
-    step_dir = 1 if prefer_large else -1
-    guards = 0
-    while abs(diff) >= 5 and guards < count * 10:
-        delta = 5 if diff > 0 else -5
-        candidate = durs[idx] + delta
-        min_allowed = 15 if (prefer_large and avg >= 20) else 5
-        max_allowed = 60
-        if min_allowed <= candidate <= max_allowed:
-            durs[idx] = candidate
-            diff -= delta
-        idx = (idx + step_dir) % count
-        guards += 1
-
-    # Absorb any remaining minutes (<5) cleanly on the last element
-    if diff != 0:
-        durs[-1] = max(1, durs[-1] + diff)
-
-    return durs
-
-def calculate_initial_shifts(n, start_mins, end_mins, cutoff_mins, is_female=False):
-    total_target = end_mins - start_mins
+def calculate_initial_shifts(n, total_target, is_female=False):
     if n <= 0 or total_target <= 0:
         return []
     if n == 1:
         return [total_target]
 
-    small_pool = [10, 15, 20]
-    large_pool = [25, 30, 35, 40, 45, 50]
+    avg = total_target / n
 
-    pre_mins = max(0, min(total_target, cutoff_mins - start_mins))
-    post_mins = max(0, total_target - pre_mins)
+    # When agent count is small relative to total time (avg >= 25 mins),
+    # use half-hour (30m) and hour (60m) blocks cleanly.
+    # Otherwise use standard intervals (10, 15, 20, 25, 30).
+    if avg >= 25:
+        base_step = 60 if avg >= 45 and abs(60 - avg) < abs(30 - avg) else 30
+        durs = [base_step] * n
+        diff = total_target - sum(durs)
 
-    if pre_mins == 0 or post_mins == 0:
-        avg = total_target / n
-        pool = large_pool if avg >= 22.5 else small_pool
-        return _fit_segment_durations(n, total_target, pool, prefer_large=is_female)
+        idx = 0 if is_female else n - 1
+        direction = 1 if is_female else -1
+        guards = 0
 
-    # Split agents proportionally between pre-cutoff and post-cutoff windows
-    n_pre = max(1, min(n - 1, round(n * (pre_mins / total_target))))
-    n_post = n - n_pre
+        while abs(diff) >= 5 and guards < n * 20:
+            step_unit = 30 if abs(diff) >= 30 else 5
+            delta = step_unit if diff > 0 else -step_unit
+            candidate = durs[idx] + delta
+            if 15 <= candidate <= 120:
+                durs[idx] = candidate
+                diff -= delta
+            idx = (idx + direction) % n
+            guards += 1
 
-    pre_durs = _fit_segment_durations(n_pre, pre_mins, small_pool, prefer_large=False)
-    post_durs = _fit_segment_durations(n_post, post_mins, large_pool, prefer_large=True)
-    return pre_durs + post_durs
+        if diff != 0:
+            durs[-1] = max(1, durs[-1] + diff)
+    else:
+        pool = [10, 15, 20, 25, 30]
+        base_step = min(pool, key=lambda x: abs(x - avg))
+        durs = [base_step] * n
+        diff = total_target - sum(durs)
+
+        idx = 0 if is_female else n - 1
+        direction = 1 if is_female else -1
+        guards = 0
+
+        while abs(diff) >= 5 and guards < n * 20:
+            delta = 5 if diff > 0 else -5
+            candidate = durs[idx] + delta
+            if 10 <= candidate <= 30:
+                durs[idx] = candidate
+                diff -= delta
+            idx = (idx + direction) % n
+            guards += 1
+
+        if diff != 0:
+            durs[-1] = max(1, durs[-1] + diff)
+
+    # Directional ordering:
+    # Females: larger intervals earlier, smaller intervals later.
+    # Males: smaller intervals earlier, larger intervals later.
+    durs.sort(reverse=is_female)
+    return durs
 
 def extract_pid_and_name(val):
     val_str = str(val).strip()
@@ -421,16 +416,14 @@ is_females = shift_mode.startswith("Females")
 if is_females:
     start_mins_const = 480     # 8:00 AM
     end_mins_const = 1200      # 8:00 PM
-    cutoff_mins_const = 720    # 12:00 PM cutoff for females
-    total_target_const = end_mins_const - start_mins_const  # 720 mins
+    total_target_const = 720   # 720 mins
     start_time_label = "8:00 AM"
     end_time_label = "8:00 PM"
     file_prefix = "Females"
 else:
     start_mins_const = 1201    # 8:01 PM
     end_mins_const = 1621      # 3:00 AM (420 mins coverage from 8:01 PM to 3:00 AM)
-    cutoff_mins_const = 1380   # 11:00 PM cutoff for males
-    total_target_const = end_mins_const - start_mins_const  # 420 mins
+    total_target_const = 420   # 420 mins
     start_time_label = "8:01 PM"
     end_time_label = "3:00 AM"
     file_prefix = "Males"
@@ -626,8 +619,7 @@ if att_file is not None and df_agents is not None:
             with gen_col1:
                 generate_clicked = st.button("🚀 Generate Final Schedule", type="primary", use_container_width=True)
             with gen_col2:
-                cutoff_label = "12:00 PM" if is_females else "11:00 PM"
-                st.info(f"⚡ Ready to distribute **{total_target_const} mins** across **{len(eligible_df) - len(excluded_pids)} agents** (small intervals before {cutoff_label}, larger intervals after).")
+                st.info(f"⚡ Ready to distribute **{total_target_const} mins** across **{len(eligible_df) - len(excluded_pids)} agents**.")
 
             if generate_clicked:
                 final_agents = eligible_df[~eligible_df['PID_clean'].isin(excluded_pids)].reset_index(drop=True)
@@ -647,13 +639,7 @@ if att_file is not None and df_agents is not None:
                     })
 
                 n = len(res_df)
-                durations = calculate_initial_shifts(
-                    n=n,
-                    start_mins=start_mins_const,
-                    end_mins=end_mins_const,
-                    cutoff_mins=cutoff_mins_const,
-                    is_female=is_females
-                )
+                durations = calculate_initial_shifts(n, total_target_const, is_female=is_females)
 
                 current_mins = start_mins_const
                 from_list, to_list = [], []
