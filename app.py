@@ -141,7 +141,7 @@ st.markdown("""
         transition: all 0.2s ease;
     }
     .stButton > button[kind="primary"]:hover {
-        background: linear-gradient(135deg, #E56700 100%, #CC5800 100%);
+        background: linear-gradient(135deg, #E56700 0%, #CC5800 100%);
         box-shadow: 0 6px 18px rgba(255, 121, 0, 0.4);
         transform: translateY(-1px);
     }
@@ -229,49 +229,70 @@ def time_str_to_abs_mins(t_str):
         m += 1440
     return m
 
-def calculate_initial_shifts(n, total_target, is_female=False):
-    if n == 0:
+def _fit_segment_durations(count, seg_mins, pool, prefer_large=False):
+    """Distribute `seg_mins` across `count` agents using preferred intervals (10, 15, 20 or 25, 30, 35, 40, 45, 50)."""
+    if count <= 0 or seg_mins <= 0:
         return []
-    
-    # الانترفالات القياسية المتاحة حسب الطلب: 10, 15, 20, 30 دقيقة
-    allowed_steps = [10, 15, 20, 30]
-    
-    # توليد توزيع مبدئي باستخدام الانترفالات القياسية بناءً على إجمالي الوقت وعدد الموظفين
-    durations = []
-    remaining_mins = total_target
-    remaining_agents = n
-    
-    for i in range(n):
-        if remaining_agents == 1:
-            durations.append(remaining_mins)
-            break
-            
-        # تقدير المدة المناسبة للعضو الحالي
-        target_avg = remaining_mins / remaining_agents
-        # اختيار أقرب انترفال قياسي متاح
-        best_step = min(allowed_steps, key=lambda x: abs(x - target_avg))
-        
-        # التأكد من بقاء دقائق كافية لباقي الموظفين (بحد أدنى 10 دقائق لكل منهم)
-        while best_step > remaining_mins - (remaining_agents - 1) * 10 and best_step > 10:
-            smaller_steps = [s for s in allowed_steps if s < best_step]
-            if smaller_steps:
-                best_step = max(smaller_steps)
-            else:
-                break
-                
-        durations.append(best_step)
-        remaining_mins -= best_step
-        remaining_agents -= 1
+    if count == 1:
+        return [seg_mins]
 
-    # ضبط الترتيب الذكي حسب الشفت:
-    # للبنات: نبدأ بالمدد الكبيرة (30, 20) في أول الشفت وتتدرج للأصغر (15, 10) في النهاية
-    # للولاد: تبدأ بالمدد الصغيرة (10, 15) وتزيد تدريجياً لتصل إلى الكبيرة في النهاية
-    if is_female:
-        durations.sort(reverse=True)
+    avg = seg_mins / count
+    if avg < min(pool):
+        base_step = 10 if avg <= 12.5 else 15
+    elif avg > max(pool):
+        base_step = max(5, int(round(avg / 5) * 5))
     else:
-        durations.sort(reverse=False)
-        
-    return durations
+        base_step = min(pool, key=lambda x: abs(x - avg))
+
+    durs = [base_step] * count
+    diff = seg_mins - sum(durs)
+
+    # Distribute diff in 5-minute steps where reasonable
+    idx = 0 if prefer_large else count - 1
+    step_dir = 1 if prefer_large else -1
+    guards = 0
+    while abs(diff) >= 5 and guards < count * 10:
+        delta = 5 if diff > 0 else -5
+        candidate = durs[idx] + delta
+        min_allowed = 15 if (prefer_large and avg >= 20) else 5
+        max_allowed = 60
+        if min_allowed <= candidate <= max_allowed:
+            durs[idx] = candidate
+            diff -= delta
+        idx = (idx + step_dir) % count
+        guards += 1
+
+    # Absorb any remaining minutes (<5) cleanly on the last element
+    if diff != 0:
+        durs[-1] = max(1, durs[-1] + diff)
+
+    return durs
+
+def calculate_initial_shifts(n, start_mins, end_mins, cutoff_mins, is_female=False):
+    total_target = end_mins - start_mins
+    if n <= 0 or total_target <= 0:
+        return []
+    if n == 1:
+        return [total_target]
+
+    small_pool = [10, 15, 20]
+    large_pool = [25, 30, 35, 40, 45, 50]
+
+    pre_mins = max(0, min(total_target, cutoff_mins - start_mins))
+    post_mins = max(0, total_target - pre_mins)
+
+    if pre_mins == 0 or post_mins == 0:
+        avg = total_target / n
+        pool = large_pool if avg >= 22.5 else small_pool
+        return _fit_segment_durations(n, total_target, pool, prefer_large=is_female)
+
+    # Split agents proportionally between pre-cutoff and post-cutoff windows
+    n_pre = max(1, min(n - 1, round(n * (pre_mins / total_target))))
+    n_post = n - n_pre
+
+    pre_durs = _fit_segment_durations(n_pre, pre_mins, small_pool, prefer_large=False)
+    post_durs = _fit_segment_durations(n_post, post_mins, large_pool, prefer_large=True)
+    return pre_durs + post_durs
 
 def extract_pid_and_name(val):
     val_str = str(val).strip()
@@ -398,16 +419,18 @@ shift_mode = st.session_state.get("shift_mode_radio", "Males (8:01 PM - 3:00 AM)
 is_females = shift_mode.startswith("Females")
 
 if is_females:
-    start_mins_const = 480     # 8:00 AM دقیقاً
-    end_mins_const = 1200      # 8:00 PM دقیقاً
-    total_target_const = 720   # 720 دقيقة صافية (من 8:00 ص إلى 8:00 م)
+    start_mins_const = 480     # 8:00 AM
+    end_mins_const = 1200      # 8:00 PM
+    cutoff_mins_const = 720    # 12:00 PM cutoff for females
+    total_target_const = end_mins_const - start_mins_const  # 720 mins
     start_time_label = "8:00 AM"
     end_time_label = "8:00 PM"
     file_prefix = "Females"
 else:
     start_mins_const = 1201    # 8:01 PM
-    end_mins_const = 1620      # 3:00 AM (next day)
-    total_target_const = 420   # 420 دقيقة
+    end_mins_const = 1621      # 3:00 AM (420 mins coverage from 8:01 PM to 3:00 AM)
+    cutoff_mins_const = 1380   # 11:00 PM cutoff for males
+    total_target_const = end_mins_const - start_mins_const  # 420 mins
     start_time_label = "8:01 PM"
     end_time_label = "3:00 AM"
     file_prefix = "Males"
@@ -524,12 +547,12 @@ if att_file is not None and df_agents is not None:
 
     df_filtered = df_att.copy()
 
-    # A. فلترة عمود Schedule State على Orange Cash فقط
+    # A. Filter Schedule State on Orange Cash
     if state_col:
         df_filtered[state_col] = df_filtered[state_col].astype(str).str.strip()
         df_filtered = df_filtered[df_filtered[state_col].str.lower() == "orange cash"].copy()
 
-    # B. فلترة عمود Team باستخدام مطابقة الكلمة المستقلة (\b) لتفادي تداخل MALE مع FEMALE
+    # B. Filter Team using word boundary (\b) so FEMALE does not match MALE
     if team_col:
         df_filtered[team_col] = df_filtered[team_col].astype(str).str.strip().str.upper()
         if is_females:
@@ -554,8 +577,6 @@ if att_file is not None and df_agents is not None:
     included_pids = set(df_agents_clean['PID_clean'])
 
     df_filtered = df_filtered[df_filtered['PID_clean'].isin(included_pids)].copy()
-    
-    # منع تكرار الموظف
     df_filtered = df_filtered.drop_duplicates(subset=['PID_clean']).reset_index(drop=True)
 
     # Map INS (Profile)
@@ -605,7 +626,8 @@ if att_file is not None and df_agents is not None:
             with gen_col1:
                 generate_clicked = st.button("🚀 Generate Final Schedule", type="primary", use_container_width=True)
             with gen_col2:
-                st.info(f"⚡ Ready to distribute **{total_target_const} minutes** across **{len(eligible_df) - len(excluded_pids)} active agents** using standard intervals (10, 15, 20, 30 mins).")
+                cutoff_label = "12:00 PM" if is_females else "11:00 PM"
+                st.info(f"⚡ Ready to distribute **{total_target_const} mins** across **{len(eligible_df) - len(excluded_pids)} agents** (small intervals before {cutoff_label}, larger intervals after).")
 
             if generate_clicked:
                 final_agents = eligible_df[~eligible_df['PID_clean'].isin(excluded_pids)].reset_index(drop=True)
@@ -624,9 +646,14 @@ if att_file is not None and df_agents is not None:
                         "Shift": final_agents['Shift_clean']
                     })
 
-                # حساب وتوزيع الانترفالات القياسية (10, 15, 20, 30) وترتيبها تصاعدياً/تنازلياً
                 n = len(res_df)
-                durations = calculate_initial_shifts(n, total_target_const, is_female=is_females)
+                durations = calculate_initial_shifts(
+                    n=n,
+                    start_mins=start_mins_const,
+                    end_mins=end_mins_const,
+                    cutoff_mins=cutoff_mins_const,
+                    is_female=is_females
+                )
 
                 current_mins = start_mins_const
                 from_list, to_list = [], []
@@ -637,8 +664,6 @@ if att_file is not None and df_agents is not None:
 
                 res_df["From"] = from_list
                 res_df["To"] = to_list
-                
-                # تأكيد صارم لختام شفت البنات عند 8:00 PM بالدقيقة الأخيرة بالضبط
                 if is_females and len(res_df) > 0:
                     res_df.loc[len(res_df) - 1, "To"] = end_time_label
 
@@ -649,7 +674,6 @@ if att_file is not None and df_agents is not None:
                 st.session_state["file_prefix"] = file_prefix
                 st.session_state["excluded_count"] = len(excluded_pids)
 
-                # Dispatch to Telegram & Google Sheets
                 excel_out = generate_styled_excel(res_df, f"{file_prefix}_Schedule")
                 dispatch_schedule_logs(
                     df=res_df,
@@ -676,7 +700,6 @@ if "schedule_df" in st.session_state:
     </div>
     """, unsafe_allow_html=True)
 
-    # Summary Metrics Row
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("👥 Scheduled Agents", f"{len(df_res)} Agents")
     m2.metric("🚫 Excluded (Task/Assist/Sick)", f"{excluded_cnt} Agents")
@@ -685,7 +708,6 @@ if "schedule_df" in st.session_state:
 
     st.write("")
 
-    # Organized Tabs
     tab_schedule, tab_emergency = st.tabs([
         "📋 Final Schedule & Export",
         "🛠️ Emergency Update (Sick / Left)"
